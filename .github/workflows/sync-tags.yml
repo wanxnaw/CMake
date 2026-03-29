@@ -1,0 +1,38 @@
+name: Sync Tags from Upstream
+
+on:
+  # 每周日 UTC 00:00 自动运行
+  schedule:
+    - cron: '0 0 * * 0'
+  
+  # 允许手动触发（点击按钮立即同步）
+  workflow_dispatch:
+
+jobs:
+  sync-tags:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 检出你的 Fork
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史，包括 tags
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      # 配置 Git
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      # 添加原仓库并获取 tags
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/Kitware/CMake.git
+          git fetch upstream --tags
+      
+      # 推送 tags 到你的 Fork
+      - name: Push tags to fork
+        run: |
+          git push origin --tags
