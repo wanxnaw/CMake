@@ -307,6 +307,7 @@ Properties on Targets
    /prop_tgt/INTERFACE_LINK_OPTIONS
    /prop_tgt/INTERFACE_POSITION_INDEPENDENT_CODE
    /prop_tgt/INTERFACE_PRECOMPILE_HEADERS
+   /prop_tgt/INTERFACE_SOURCE_SETS
    /prop_tgt/INTERFACE_SOURCES
    /prop_tgt/INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
    /prop_tgt/INTERPROCEDURAL_OPTIMIZATION
@@ -405,9 +406,15 @@ Properties on Targets
    /prop_tgt/RUNTIME_OUTPUT_DIRECTORY_CONFIG
    /prop_tgt/RUNTIME_OUTPUT_NAME
    /prop_tgt/RUNTIME_OUTPUT_NAME_CONFIG
+   /prop_tgt/Rust_EDITION
    /prop_tgt/SKIP_BUILD_RPATH
    /prop_tgt/SKIP_LINTING
    /prop_tgt/SOURCE_DIR
+   /prop_tgt/SOURCE_DIRS
+   /prop_tgt/SOURCE_DIRS_NAME
+   /prop_tgt/SOURCE_SET
+   /prop_tgt/SOURCE_SET_NAME
+   /prop_tgt/SOURCE_SETS
    /prop_tgt/SOURCES
    /prop_tgt/SOVERSION
    /prop_tgt/SPDX_LICENSE
@@ -534,6 +541,13 @@ Properties on File Sets
    :maxdepth: 1
 
    /prop_fs/BASE_DIRS
+   /prop_fs/COMPILE_DEFINITIONS
+   /prop_fs/COMPILE_OPTIONS
+   /prop_fs/CXX_SCAN_FOR_MODULES
+   /prop_fs/INCLUDE_DIRECTORIES
+   /prop_fs/INTERFACE_COMPILE_DEFINITIONS
+   /prop_fs/INTERFACE_COMPILE_OPTIONS
+   /prop_fs/INTERFACE_INCLUDE_DIRECTORIES
    /prop_fs/INTERFACE_SOURCES
    /prop_fs/SCOPE
    /prop_fs/SOURCES

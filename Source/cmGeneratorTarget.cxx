@@ -92,12 +92,11 @@ static void CreatePropertyGeneratorExpressions(
 
 cmGeneratorTarget::cmGeneratorTarget(cmTarget* t, cmLocalGenerator* lg)
   : Target(t)
+  , Makefile(t->GetMakefile())
+  , LocalGenerator(lg)
+  , GlobalGenerator(lg->GetGlobalGenerator())
   , FileSets(cm::make_unique<cmGeneratorFileSets>(this, lg))
 {
-  this->Makefile = this->Target->GetMakefile();
-  this->LocalGenerator = lg;
-  this->GlobalGenerator = this->LocalGenerator->GetGlobalGenerator();
-
   this->GlobalGenerator->ComputeTargetObjectDirectory(this);
 
   CreatePropertyGeneratorExpressions(*lg->GetCMakeInstance(),
@@ -2802,6 +2801,14 @@ void cmGeneratorTarget::AddHIPArchitectureFlags(cmBuildStep compileOrLink,
   }
 }
 
+void cmGeneratorTarget::AddRustTargetFlags(std::string& flags) const
+{
+  cmValue const edition = this->GetProperty("Rust_EDITION");
+  if (edition && !edition->empty()) {
+    flags += " --edition=" + *edition;
+  }
+}
+
 void cmGeneratorTarget::AddCUDAToolkitFlags(std::string& flags) const
 {
   std::string const& compiler =
@@ -5385,7 +5392,7 @@ bool cmGeneratorTarget::DiscoverSyntheticTargets(
 
   for (auto const& entry : impl.Libraries) {
     auto const* gt = entry.Target;
-    if (!gt || !gt->HaveCxx20ModuleSources()) {
+    if (!gt || !gt->HaveInterfaceCxx20ModuleSources()) {
       continue;
     }
 
@@ -5426,7 +5433,8 @@ bool cmGeneratorTarget::DiscoverSyntheticTargets(
 
       // Copy file sets.
       {
-        for (auto const* gfs : gt->GetAllFileSets()) {
+        for (auto const* gfs :
+             gt->GetInterfaceFileSets(cm::FileSetMetadata::CXX_MODULES)) {
           auto* newFs =
             tgt
               ->GetOrCreateFileSet(gfs->GetName(), gfs->GetType(),
@@ -5874,14 +5882,14 @@ bool cmGeneratorTarget::HaveFortranSources() const
   return have_direct || have_via_target_objects;
 }
 
+bool cmGeneratorTarget::HaveInterfaceCxx20ModuleSources() const
+{
+  return !this->GetInterfaceFileSets(cm::FileSetMetadata::CXX_MODULES).empty();
+}
 bool cmGeneratorTarget::HaveCxx20ModuleSources() const
 {
-  auto const& fileSets = this->GetAllFileSets();
-  return std::any_of(fileSets.begin(), fileSets.end(),
-                     [](cmGeneratorFileSet const* file_set) -> bool {
-                       auto const& fs_type = file_set->GetType();
-                       return fs_type == cm::FileSetMetadata::CXX_MODULES;
-                     });
+  return !this->GetFileSets(cm::FileSetMetadata::CXX_MODULES).empty() ||
+    !this->GetInterfaceFileSets(cm::FileSetMetadata::CXX_MODULES).empty();
 }
 
 cmGeneratorTarget::Cxx20SupportLevel cmGeneratorTarget::HaveCxxModuleSupport(
@@ -6046,6 +6054,12 @@ bool cmGeneratorTarget::NeedDyndepForSource(std::string const& lang,
   auto targetDyndep = this->NeedCxxDyndep(config);
   if (targetDyndep == CxxModuleSupport::Unavailable) {
     return false;
+  }
+  if (fs) {
+    auto const fsProp = fs->GetProperty("CXX_SCAN_FOR_MODULES");
+    if (fsProp.IsSet()) {
+      return fsProp.IsOn();
+    }
   }
   auto const sfProp = sf->GetProperty("CXX_SCAN_FOR_MODULES");
   if (sfProp.IsSet()) {

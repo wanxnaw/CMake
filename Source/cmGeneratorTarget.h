@@ -626,6 +626,8 @@ public:
 
   void AddISPCTargetFlags(std::string& flags) const;
 
+  void AddRustTargetFlags(std::string& flags) const;
+
   std::string GetFeatureSpecificLinkRuleVariable(
     std::string const& var, std::string const& lang,
     std::string const& config) const;
@@ -1544,6 +1546,7 @@ public:
    * This will inspect the target itself to see if C++20 module
    * support is expected to work based on its sources.
    */
+  bool HaveInterfaceCxx20ModuleSources() const;
   bool HaveCxx20ModuleSources() const;
 
   enum class Cxx20SupportLevel

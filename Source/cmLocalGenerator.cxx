@@ -2140,6 +2140,8 @@ void cmLocalGenerator::AddLanguageFlags(std::string& flags,
     }
   } else if (lang == "HIP") {
     target->AddHIPArchitectureFlags(compileOrLink, config, flags);
+  } else if (lang == "Rust") {
+    target->AddRustTargetFlags(flags);
   }
 
   // Add VFS Overlay for Clang compilers
@@ -3912,6 +3914,17 @@ void cmLocalGenerator::AppendDefines(std::set<std::string>& defines,
   }
 }
 
+void cmLocalGenerator::AppendDefines(
+  std::set<std::string>& defines,
+  std::vector<BT<std::string>> const& defines_vec) const
+{
+  std::set<BT<std::string>> tmp;
+  this->AppendDefines(tmp, defines_vec);
+  for (BT<std::string> const& i : tmp) {
+    defines.emplace(i.Value);
+  }
+}
+
 void cmLocalGenerator::AppendDefines(std::set<BT<std::string>>& defines,
                                      std::string const& defines_list) const
 {
@@ -5225,9 +5238,15 @@ std::vector<std::string> ComputeISPCObjectSuffixes(cmGeneratorTarget* target)
       // transform targets into the suffixes
       auto pos = ispcTarget.find('-');
       auto target_suffix = ispcTarget.substr(0, pos);
+      // ISPC uses underscores in output file suffixes where the target name
+      // has dots (e.g. "avx10.2dmr" produces files with "_avx10_2dmr" suffix)
+      std::replace(target_suffix.begin(), target_suffix.end(), '.', '_');
       if (target_suffix ==
           "avx1") { // when targeting avx1 ISPC uses the 'avx' output string
         target_suffix = "avx";
+      } else if (target_suffix == "sse4_1" || target_suffix == "sse4_2") {
+        // when targeting sse4.1 or sse4.2 ISPC uses the 'sse4' output string
+        target_suffix = "sse4";
       }
       ispcTarget = target_suffix;
     }

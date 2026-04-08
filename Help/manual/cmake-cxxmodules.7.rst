@@ -50,8 +50,11 @@ scan or not is used.
   be scanned.
 - If the target does not use at least C++ 20, it will not be scanned.
 - If the source file is not the language ``CXX``, it will not be scanned.
-- If the :prop_sf:`CXX_SCAN_FOR_MODULES` source file property is set, its
+- If the source file belongs to a file set that is not of type ``CXX_MODULES``,
+  and the :prop_fs:`CXX_SCAN_FOR_MODULES` file set property is set, its
   value will be used.
+- If the :prop_sf:`CXX_SCAN_FOR_MODULES` source file property is set in the
+  target's directory, its value will be used.
 - If the :prop_tgt:`CXX_SCAN_FOR_MODULES` target property is set, its value
   will be used.  Set the :variable:`CMAKE_CXX_SCAN_FOR_MODULES` variable
   to initialize this property on all targets as they are created.
@@ -69,7 +72,13 @@ The list of compilers for which CMake supports scanning sources for C++
 modules includes:
 
 * MSVC toolset 14.34 and newer (provided with Visual Studio 17.4 and newer)
+
 * LLVM/Clang 16.0 and newer
+
+  .. versionadded:: 4.4
+
+    ``clang-cl`` version 19.1 and newer
+
 * GCC 14 and newer
 
 ``import std`` Support
