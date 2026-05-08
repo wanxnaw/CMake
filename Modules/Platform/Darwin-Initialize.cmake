@@ -222,6 +222,10 @@ function(_apple_resolve_multi_arch_sysroots)
     set(_arch_sysroot "")
     foreach(sdk ${_sdks})
       list(FIND _sdk_archs_${sdk} ${arch} arch_index)
+      # arm64e is a superset of arm64; an SDK listing arm64e supports arm64 binaries.
+      if(arch_index EQUAL -1 AND arch STREQUAL "arm64")
+        list(FIND _sdk_archs_${sdk} "arm64e" arch_index)
+      endif()
       if(NOT arch_index EQUAL -1)
         set(_arch_sysroot ${_sdk_path_${sdk}})
         break()
@@ -288,10 +292,11 @@ endif()
 if(NOT CMAKE_CROSSCOMPILING)
   execute_process(COMMAND sw_vers -productVersion
     OUTPUT_VARIABLE _CMAKE_HOST_OSX_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _result)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+if(_result EQUAL 0 AND CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(_CMAKE_OSX_DEPLOYMENT_TARGET_DEFAULT "$ENV{MACOSX_DEPLOYMENT_TARGET}")
 
   # Xcode chooses a default macOS deployment target based on the macOS SDK

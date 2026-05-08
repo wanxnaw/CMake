@@ -11,6 +11,7 @@
 
 #include "cmArgumentParser.h"
 #include "cmArgumentParserTypes.h"
+#include "cmDiagnostics.h"
 #include "cmFileSet.h"
 #include "cmFileSetMetadata.h"
 #include "cmGeneratorExpression.h"
@@ -186,7 +187,7 @@ std::vector<std::string> TargetSourcesImpl::ConvertToAbsoluteContent(
       e << "A private source from a directory other than that of target \""
         << tgt->GetName() << "\" has a relative path.";
     }
-    this->Makefile->IssueMessage(MessageType::AUTHOR_WARNING, e.str());
+    this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e.str());
   }
 
   return useAbsoluteContent ? absoluteContent : content;
@@ -228,10 +229,6 @@ bool TargetSourcesImpl::HandleOneFileSet(
     this->SetError("FILE_SETs may not be added to custom targets");
     return false;
   }
-  if (this->Target->IsFrameworkOnApple()) {
-    this->SetError("FILE_SETs may not be added to FRAMEWORK targets");
-    return false;
-  }
 
   if (!args.Type.empty() && !cm::FileSetMetadata::IsKnownType(args.Type)) {
     this->SetError(
@@ -268,6 +265,13 @@ bool TargetSourcesImpl::HandleOneFileSet(
   std::string type = isDefault ? args.FileSet : args.Type;
   cm::FileSetMetadata::Visibility visibility =
     cm::FileSetMetadata::VisibilityFromName(scope, this->Makefile);
+
+  if (this->Target->IsFrameworkOnApple() &&
+      !cm::FileSetMetadata::IsFrameworkSupported(type)) {
+    this->SetError(cmStrCat(R"(FILE_SETs, of type ")", type,
+                            R"(", may not be added to FRAMEWORK targets)"));
+    return false;
+  }
 
   auto fileSet =
     this->Target->GetOrCreateFileSet(args.FileSet, type, visibility);

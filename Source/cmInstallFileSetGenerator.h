@@ -9,8 +9,9 @@
 
 #include "cmInstallGenerator.h"
 
-class cmGeneratorTarget;
+class cmExportInstallCMakeConfigGenerator;
 class cmGeneratorFileSet;
+class cmGeneratorTarget;
 class cmListFileBacktrace;
 class cmLocalGenerator;
 
@@ -19,23 +20,32 @@ class cmInstallFileSetGenerator : public cmInstallGenerator
 public:
   cmInstallFileSetGenerator(std::string targetName, std::string fileSetName,
                             std::string destination,
-                            std::string file_permissions,
+                            std::string filePermissions,
                             std::vector<std::string> const& configurations,
                             std::string const& component, MessageLevel message,
-                            bool exclude_from_all, bool optional,
+                            bool excludeFromAll, bool optional,
                             cmListFileBacktrace backtrace);
   ~cmInstallFileSetGenerator() override;
 
   bool Compute(cmLocalGenerator* lg) override;
 
+  struct DestinationContext
+  {
+    std::string UnescapedDestination;
+    bool HadContextSensitiveCondition;
+  };
   std::string GetDestination(std::string const& config) const;
-  std::string GetDestination() const { return this->Destination; }
+  DestinationContext GetDestination(cmGeneratorTarget* gt,
+                                    std::string const& config) const;
   bool GetOptional() const { return this->Optional; }
   std::string GetFileSetName() const { return this->FileSetName; }
   cmGeneratorFileSet const* GetFileSet() const { return this->FileSet; };
   cmGeneratorTarget* GetTarget() const { return this->Target; }
 
 protected:
+  friend cmExportInstallCMakeConfigGenerator;
+  std::string GetDestination() const;
+
   void GenerateScriptForConfig(std::ostream& os, std::string const& config,
                                Indent indent) override;
 

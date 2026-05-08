@@ -23,7 +23,7 @@ foreach(snippet IN LISTS snippets)
 
   # Verify target
   string(JSON target ERROR_VARIABLE noTarget GET "${contents}" target)
-  if (NOT target MATCHES NOTFOUND)
+  if (target)
     set(targets "main;lib;customTarget;TARGET_NAME")
     if (ARGS_FAIL)
       list(APPEND targets "dummy")
@@ -39,18 +39,18 @@ foreach(snippet IN LISTS snippets)
     string(JSON source GET "${contents}" source)
     string(JSON language GET "${contents}" language)
     string(JSON result GET "${contents}" result)
-    if (NOT language MATCHES "C\\+\\+")
-      json_error("${snippet}" "Expected C++ compile language")
+    if (NOT language STREQUAL "C")
+      json_error("${snippet}" "Expected C compile language")
     endif()
-    if (NOT source MATCHES "${target}.cxx$")
+    if (NOT source MATCHES "${target}.c$")
       json_error("${snippet}" "Unexpected source file")
     endif()
     if (ARGS_FAIL)
-      if (source MATCHES "dummy.cxx" AND result EQUAL 0)
+      if (source MATCHES "dummy.c" AND result EQUAL 0)
         json_error("${snippet}"
           "Expected nonzero exit code for compile command, got: ${result}"
         )
-      elseif (NOT source MATCHES "dummy.cxx" AND NOT result EQUAL 0)
+      elseif (NOT source MATCHES "dummy.c" AND NOT result EQUAL 0)
         json_error("${snippet}"
           "Expected zero exit code for compile command, got: ${result}"
         )
@@ -120,7 +120,7 @@ foreach(snippet IN LISTS snippets)
   endif()
 
   # Verify the overall result, in addition to the sub-commands above.
-  if (filename MATCHES "^cmakeInstall|^cmakeBuild|^ctest")
+  if (filename MATCHES "^(cmakeInstall|cmakeBuild|ctest)")
     string(JSON result GET "${contents}" result)
     if (ARGS_FAIL AND result EQUAL 0)
       json_error("${snippet}"
@@ -134,7 +134,7 @@ foreach(snippet IN LISTS snippets)
   endif()
 
   # Verify that Config is Debug
-  if (filename MATCHES "^test|^compile|^link|^custom|^install")
+  if (filename MATCHES "^(test|compile|link|custom|install)")
     string(JSON config GET "${contents}" config)
     if (NOT config STREQUAL "Debug")
       json_error(${snippet} "Unexpected config: ${config}")
@@ -142,7 +142,7 @@ foreach(snippet IN LISTS snippets)
   endif()
 
   # Verify command args were passed
-  if (filename MATCHES "^cmakeBuild|^ctest")
+  if (filename MATCHES "^(cmakeBuild|ctest)")
     string(JSON command GET "${contents}" command)
     if (NOT command MATCHES "Debug")
       json_error(${snippet} "Command value missing passed arguments")

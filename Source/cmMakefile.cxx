@@ -288,7 +288,7 @@ void cmMakefile::MaybeWarnCMP0074(std::string const& rootVar, cmValue rootDef,
                     *rootEnv, '\n');
     }
     e += "For compatibility, CMake is ignoring the variable.";
-    this->IssueMessage(MessageType::AUTHOR_WARNING, e);
+    this->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e);
   }
 }
 
@@ -308,7 +308,7 @@ void cmMakefile::MaybeWarnCMP0144(std::string const& rootVar, cmValue rootDef,
     }
     e += "For compatibility, find_package is ignoring the variable, but "
          "code in a .cmake module might still use it.";
-    this->IssueMessage(MessageType::AUTHOR_WARNING, e);
+    this->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e);
   }
 }
 
@@ -1700,16 +1700,15 @@ void cmMakefile::Configure()
     }
     // if no project command is found, add one
     if (!hasProject) {
-      this->GetCMakeInstance()->IssueMessage(
-        MessageType::AUTHOR_WARNING,
+      this->IssueDiagnostic(
+        cmDiagnostics::CMD_AUTHOR,
         "No project() command is present.  The top-level CMakeLists.txt "
         "file must contain a literal, direct call to the project() command.  "
         "Add a line of code such as\n"
         "  project(ProjectName)\n"
         "near the top of the file, but after cmake_minimum_required().\n"
         "CMake is pretending there is a \"project(Project)\" command on "
-        "the first line.",
-        this->Backtrace);
+        "the first line.");
       cmListFileFunction project{
         "project", 0, 0, { { "Project", cmListFileArgument::Unquoted, 0 } }
       };
@@ -1932,8 +1931,8 @@ void cmMakefile::AddCacheDefinition(std::string const& name, cmValue value,
     case cmPolicies::WARN:
       if (this->PolicyOptionalWarningEnabled("CMAKE_POLICY_WARNING_CMP0126") &&
           this->IsNormalDefinitionSet(name)) {
-        this->IssueMessage(
-          MessageType::AUTHOR_WARNING,
+        this->IssueDiagnostic(
+          cmDiagnostics::CMD_AUTHOR,
           cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0126),
                    "\nFor compatibility with older versions of CMake, normal "
                    "variable \"",
@@ -1965,12 +1964,15 @@ void cmMakefile::MaybeWarnUninitialized(std::string const& variable,
   // check to see if we need to print a warning
   // if strict mode is on and the variable has
   // not been "cleared"/initialized with a set(foo ) call
-  if (this->GetCMakeInstance()->GetWarnUninitialized() &&
+  cmDiagnosticAction const action =
+    this->GetDiagnosticAction(cmDiagnostics::CMD_UNINITIALIZED);
+  if (action != cmDiagnostics::Ignore &&
       !this->VariableInitialized(variable)) {
     if (this->CheckSystemVars ||
         (sourceFilename && this->IsProjectFile(sourceFilename))) {
-      this->IssueMessage(MessageType::AUTHOR_WARNING,
-                         cmStrCat("uninitialized variable '", variable, '\''));
+      this->IssueDiagnostic(
+        cmDiagnostics::CMD_UNINITIALIZED,
+        cmStrCat("uninitialized variable '", variable, '\''));
     }
   }
 }
@@ -3207,8 +3209,8 @@ void cmMakefile::EnableLanguage(std::vector<std::string> const& languages,
     }
     if (!duplicate_languages.empty()) {
       auto quantity = duplicate_languages.size() == 1 ? " has"_s : "s have"_s;
-      this->IssueMessage(
-        MessageType::AUTHOR_WARNING,
+      this->IssueDiagnostic(
+        cmDiagnostics::CMD_AUTHOR,
         cmStrCat("Languages to be enabled may not be specified more "
                  "than once at the same time. The following language",
                  quantity, " been specified multiple times: ",
@@ -3317,7 +3319,7 @@ int cmMakefile::TryCompile(std::string const& srcdir,
   if (cmakeArgs) {
     // FIXME: Workaround to ignore unused CLI variables in try-compile.
     //
-    // Ideally we should use SetArgs for options like --no-warn-unused-cli.
+    // Ideally we should use SetArgs for options like -Wno-unused-cli.
     // However, there is a subtle problem when certain arguments are passed to
     // a macro wrapping around try_compile or try_run that does not escape
     // semicolons in its parameters but just passes ${ARGV} or ${ARGN}.  In
@@ -3336,8 +3338,9 @@ int cmMakefile::TryCompile(std::string const& srcdir,
     // the value VAR=a is sufficient for the try_compile or try_run to get the
     // correct result.  Calling SetArgs here would break such projects that
     // previously built.  Instead we work around the issue by never reporting
-    // unused arguments and ignoring options such as --no-warn-unused-cli.
-    cm.SetWarnUnusedCli(false);
+    // unused arguments and ignoring options such as -Wno-unused-cli.
+    cm.GetCurrentSnapshot().SetDiagnostic(cmDiagnostics::CMD_UNUSED_CLI,
+                                          cmDiagnostics::Ignore, true);
     // cm.SetArgs(*cmakeArgs, true);
 
     cm.SetCacheArgs(*cmakeArgs);
@@ -3345,12 +3348,12 @@ int cmMakefile::TryCompile(std::string const& srcdir,
   // to save time we pass the EnableLanguage info directly
   cm.GetGlobalGenerator()->EnableLanguagesFromGenerator(
     this->GetGlobalGenerator(), this);
-  if (this->IsOn("CMAKE_SUPPRESS_DEVELOPER_WARNINGS")) {
-    cm.AddCacheEntry("CMAKE_SUPPRESS_DEVELOPER_WARNINGS", "TRUE", "",
-                     cmStateEnums::INTERNAL);
-  } else {
-    cm.AddCacheEntry("CMAKE_SUPPRESS_DEVELOPER_WARNINGS", "FALSE", "",
-                     cmStateEnums::INTERNAL);
+  for (unsigned dc = 1; dc < cmDiagnostics::CategoryCount; ++dc) {
+    auto const category = static_cast<cmDiagnosticCategory>(dc);
+    if (this->GetDiagnosticAction(category) == cmDiagnostics::Ignore) {
+      cm.GetCurrentSnapshot().SetDiagnostic(category, cmDiagnostics::Ignore,
+                                            false);
+    }
   }
   if (cm.Configure() != 0) {
     this->IssueMessage(MessageType::FATAL_ERROR,
@@ -3835,8 +3838,8 @@ void cmMakefile::RaiseScope(std::string const& var, char const* varDef)
   }
 
   if (!this->StateSnapshot.RaiseScope(var, varDef)) {
-    this->IssueMessage(
-      MessageType::AUTHOR_WARNING,
+    this->IssueDiagnostic(
+      cmDiagnostics::CMD_AUTHOR,
       cmStrCat("Cannot set \"", var, "\": current scope has no parent."));
     return;
   }
@@ -3867,11 +3870,11 @@ cmTarget* cmMakefile::AddImportedTarget(std::string const& name,
                                         bool global)
 {
   // Create the target.
-  std::unique_ptr<cmTarget> target(
-    new cmTarget(name, type,
-                 global ? cmTarget::Visibility::ImportedGlobally
-                        : cmTarget::Visibility::Imported,
-                 this, cmTarget::PerConfig::Yes));
+  auto target =
+    cm::make_unique<cmTarget>(name, type,
+                              global ? cmTarget::Visibility::ImportedGlobally
+                                     : cmTarget::Visibility::Imported,
+                              this, cmTarget::PerConfig::Yes);
 
   // Add to the set of available imported targets.
   this->ImportedTargets[name] = target.get();
@@ -3887,9 +3890,9 @@ cmTarget* cmMakefile::AddForeignTarget(std::string const& origin,
                                        std::string const& name)
 {
   auto foreign_name = cmStrCat("@foreign_", origin, "::", name);
-  std::unique_ptr<cmTarget> target(new cmTarget(
+  auto target = cm::make_unique<cmTarget>(
     foreign_name, cmStateEnums::TargetType::INTERFACE_LIBRARY,
-    cmTarget::Visibility::Foreign, this, cmTarget::PerConfig::Yes));
+    cmTarget::Visibility::Foreign, this, cmTarget::PerConfig::Yes);
 
   this->ImportedTargets[foreign_name] = target.get();
   this->GetGlobalGenerator()->IndexTarget(target.get());
@@ -4132,11 +4135,37 @@ bool cmMakefile::SetPolicy(cmPolicies::PolicyID id,
           id == cmPolicies::CMP0104 || id == cmPolicies::CMP0123 ||
           id == cmPolicies::CMP0126 || id == cmPolicies::CMP0128 ||
           id == cmPolicies::CMP0136 || id == cmPolicies::CMP0141 ||
-          id == cmPolicies::CMP0155)) &&
-      (!this->IsSet("CMAKE_WARN_DEPRECATED") ||
-       this->IsOn("CMAKE_WARN_DEPRECATED"))) {
-    this->IssueMessage(MessageType::DEPRECATION_WARNING,
-                       cmPolicies::GetPolicyDeprecatedWarning(id));
+          id == cmPolicies::CMP0155))) {
+    std::unique_ptr<PolicyPushPop> ps;
+    std::unique_ptr<DiagnosticPushPop> ds;
+
+    cmPolicies::PolicyStatus const cmp0218 =
+      this->GetPolicyStatus(cmPolicies::CMP0218);
+    if (cmp0218 != cmPolicies::NEW) {
+      if (cmp0218 != cmPolicies::OLD) {
+        // Suppress warnings about using old variables.
+        ps = cm::make_unique<PolicyPushPop>(this);
+        this->SetPolicy(cmPolicies::CMP0218, cmPolicies::OLD);
+      }
+
+      ds = cm::make_unique<DiagnosticPushPop>(this);
+
+      // Use old variables to determine diagnostic action.
+      cmValue const warn = this->GetDefinition("CMAKE_WARN_DEPRECATED");
+      if (warn.IsSet() && !warn.IsOn()) {
+        this->SetDiagnostic(cmDiagnostics::CMD_DEPRECATED,
+                            cmDiagnostics::Ignore);
+      } else if (this->IsOn("CMAKE_ERROR_DEPRECATED")) {
+        this->SetDiagnostic(cmDiagnostics::CMD_DEPRECATED,
+                            cmDiagnostics::SendError);
+      } else {
+        this->SetDiagnostic(cmDiagnostics::CMD_DEPRECATED,
+                            cmDiagnostics::Warn);
+      }
+    }
+
+    this->IssueDiagnostic(cmDiagnostics::CMD_DEPRECATED,
+                          cmPolicies::GetPolicyDeprecatedWarning(id));
   }
 
   this->StateSnapshot.SetPolicy(id, status);

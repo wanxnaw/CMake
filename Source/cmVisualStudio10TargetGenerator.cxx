@@ -27,6 +27,7 @@
 #include "cmCryptoHash.h"
 #include "cmCustomCommand.h"
 #include "cmCustomCommandGenerator.h"
+#include "cmDiagnostics.h"
 #include "cmFileSetMetadata.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGeneratorExpression.h"
@@ -397,7 +398,7 @@ void cmVisualStudio10TargetGenerator::Generate()
       cmStrCat("The C# target \"", this->GeneratorTarget->GetName(),
                "\" is of type STATIC_LIBRARY. This is discouraged (and may be "
                "disabled in future). Make it a SHARED library instead.");
-    this->Makefile->IssueMessage(MessageType::DEPRECATION_WARNING, message);
+    this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_DEPRECATED, message);
   }
 
   if (this->Android &&
@@ -2006,14 +2007,16 @@ void cmVisualStudio10TargetGenerator::WriteGroups()
   std::set<cmSourceGroup const*> groupsUsed;
   for (cmGeneratorTarget::AllConfigSource const& si : sources) {
     std::string const& source = si.Source->GetFullPath();
-    cmSourceGroup* sourceGroup = this->LocalGenerator->FindSourceGroup(source);
+    cmSourceGroup const* sourceGroup =
+      this->LocalGenerator->FindSourceGroup(source);
     groupsUsed.insert(sourceGroup);
   }
 
   if (cmSourceFile const* srcCMakeLists =
         this->LocalGenerator->CreateVCProjBuildRule()) {
     std::string const& source = srcCMakeLists->GetFullPath();
-    cmSourceGroup* sourceGroup = this->LocalGenerator->FindSourceGroup(source);
+    cmSourceGroup const* sourceGroup =
+      this->LocalGenerator->FindSourceGroup(source);
     groupsUsed.insert(sourceGroup);
   }
 
@@ -2172,7 +2175,8 @@ void cmVisualStudio10TargetGenerator::WriteGroupSources(
   for (ToolSource const& s : sources) {
     cmSourceFile const* sf = s.SourceFile;
     std::string const& source = sf->GetFullPath();
-    cmSourceGroup* sourceGroup = this->LocalGenerator->FindSourceGroup(source);
+    cmSourceGroup const* sourceGroup =
+      this->LocalGenerator->FindSourceGroup(source);
     std::string const& filter = sourceGroup->GetFullName();
     std::string path = this->ConvertPath(source, s.RelativePath);
     ConvertToWindowsSlash(path);
@@ -6074,7 +6078,7 @@ std::string cmVisualStudio10TargetGenerator::GetCSharpSourceLink(
   std::string const& fullFileName = source->GetFullPath();
   std::string const& srcDir = this->Makefile->GetCurrentSourceDirectory();
   std::string const& binDir = this->Makefile->GetCurrentBinaryDirectory();
-  cmSourceGroup* sourceGroup =
+  cmSourceGroup const* sourceGroup =
     this->LocalGenerator->FindSourceGroup(fullFileName);
   if (sourceGroup && !sourceGroup->GetFullName().empty()) {
     sourceGroupedFile =

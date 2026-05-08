@@ -430,6 +430,7 @@ if(BUILD_TESTING)
   string(REPLACE ";" "$<SEMICOLON>" TEST_STDS_CUDA "${CMake_TEST_CUDA_STANDARDS}")
   string(REPLACE ";" "$<SEMICOLON>" TEST_STDS_HIP "${CMake_TEST_HIP_STANDARDS}")
   set(CompileFeatures_BUILD_OPTIONS
+    -DCMake_TEST_CXX=${CMake_TEST_CXX}
     -DCMake_TEST_C_STANDARDS=${TEST_STDS_C}
     -DCMake_TEST_CXX_STANDARDS=${TEST_STDS_CXX}
     -DCMake_TEST_CUDA=${CMake_TEST_CUDA}
@@ -439,11 +440,13 @@ if(BUILD_TESTING)
     )
   ADD_TEST_MACRO(CompileFeatures CompileFeatures)
   set_property(TEST CompileFeatures APPEND PROPERTY LABELS "CUDA" "HIP")
+  set_property(TEST CompileFeatures APPEND PROPERTY LABELS "PellesC")
 
   ADD_TEST_MACRO(CMakeCommands.target_compile_features)
 
   if(CMake_TEST_RESOURCES)
     ADD_TEST_MACRO(VSResource VSResource)
+    set_property(TEST VSResource APPEND PROPERTY LABELS "PellesC")
     if(CMAKE_GENERATOR MATCHES "Ninja")
       add_test_macro(VSResourceNinjaForceRSP VSResourceNinjaForceRSP)
     endif()
@@ -530,6 +533,7 @@ if(BUILD_TESTING)
   endif()
 
   ADD_TEST_MACRO(COnly COnly)
+  set_property(TEST COnly APPEND PROPERTY LABELS "PellesC")
   ADD_TEST_MACRO(CxxOnly CxxOnly)
   ADD_TEST_MACRO(CxxSubdirC CxxSubdirC)
   ADD_TEST_MACRO(OutDir runtime/OutDir)
@@ -1214,7 +1218,8 @@ if(BUILD_TESTING)
         execute_process(COMMAND ${CMAKE_COMMAND} -E env LC_ALL=C ${SHLIBDEPS_EXECUTABLE} --version
           OUTPUT_VARIABLE _TMP_VERSION
           ERROR_QUIET
-          OUTPUT_STRIP_TRAILING_WHITESPACE)
+          OUTPUT_STRIP_TRAILING_WHITESPACE
+          RESULT_VARIABLE _result_dpkg_version)
         if(_TMP_VERSION MATCHES "dpkg-shlibdeps version ([0-9]+\\.[0-9]+\\.[0-9]+)")
           set(SHLIBDEPS_EXECUTABLE_VERSION "${CMAKE_MATCH_1}")
         else()
@@ -1959,6 +1964,7 @@ if(BUILD_TESTING)
         COMMAND sw_vers -productVersion
         OUTPUT_VARIABLE OSX_VERSION
         OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _sw_vers_result
         )
       if(OSX_VERSION MATCHES "^([0-9]+\\.[0-9]+)")
         set(CMake_TEST_XCTest_DEPLOYMENT_TARGET "${CMAKE_MATCH_1}")
@@ -2091,9 +2097,10 @@ if(BUILD_TESTING)
       set_property(TEST MSVCRuntimeLibrary.Fortran APPEND PROPERTY LABELS "Fortran")
     endif()
   endif()
-  if(MSVC OR
+  if(MSVC OR CMAKE_C_COMPILER_ID MATCHES "PellesC" OR
       "${CMAKE_GENERATOR}" MATCHES "(MSYS|MinGW) Makefiles")
     ADD_TEST_MACRO(ModuleDefinition example_exe)
+    set_property(TEST ModuleDefinition APPEND PROPERTY LABELS "PellesC")
   endif()
 
   if(CMAKE_C_COMPILER_ID MATCHES "Watcom" AND WIN32)
@@ -2138,6 +2145,11 @@ if(BUILD_TESTING)
      AND (NOT CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
       )
     ADD_TEST_MACRO(VSMASM VSMASM)
+  endif()
+
+  if(CMAKE_C_COMPILER_ID STREQUAL "PellesC")
+    ADD_TEST_MACRO(PellesASM PellesASM)
+    set_property(TEST PellesASM APPEND PROPERTY LABELS "PellesC")
   endif()
 
   if(CMAKE_GENERATOR MATCHES "Visual Studio")
@@ -2464,7 +2476,7 @@ if(BUILD_TESTING)
     --build-options
       "-DUNUSED_CLI_VARIABLE=Unused")
   set_tests_properties(WarnUnusedCliUnused PROPERTIES
-    PASS_REGULAR_EXPRESSION "CMake Warning:.*Manually-specified variables were not used by the project:.*  UNUSED_CLI_VARIABLE")
+    PASS_REGULAR_EXPRESSION "CMake Warning \\(unused-cli\\):.*Manually-specified variables were not used by the project:.*  UNUSED_CLI_VARIABLE")
   list(APPEND TEST_BUILD_DIRS "${CMake_BINARY_DIR}/Tests/WarnUnusedCliUnused")
 
   add_test(WarnUnusedCliUsed ${CMAKE_CTEST_COMMAND}
@@ -3021,7 +3033,7 @@ if(BUILD_TESTING)
     )
   #make sure all 3 subdirs were added
   set_tests_properties(CTestTestSubdir PROPERTIES
-    PASS_REGULAR_EXPRESSION "0 tests failed out of 3")
+    PASS_REGULAR_EXPRESSION "100% tests passed out of 3")
 
   configure_file(
     "${CMake_SOURCE_DIR}/Tests/CTestTestDepends/test.cmake.in"

@@ -18,6 +18,7 @@
 
 #include "cmArgumentParser.h"
 #include "cmConfigureLog.h"
+#include "cmDiagnostics.h"
 #include "cmExperimental.h"
 #include "cmExportTryCompileFileGenerator.h"
 #include "cmGlobalGenerator.h"
@@ -84,7 +85,6 @@ std::string const kCMAKE_TRY_COMPILE_OSX_ARCHITECTURES =
   "CMAKE_TRY_COMPILE_OSX_ARCHITECTURES";
 std::string const kCMAKE_TRY_COMPILE_PLATFORM_VARIABLES =
   "CMAKE_TRY_COMPILE_PLATFORM_VARIABLES";
-std::string const kCMAKE_WARN_DEPRECATED = "CMAKE_WARN_DEPRECATED";
 std::string const kCMAKE_WATCOM_RUNTIME_LIBRARY_DEFAULT =
   "CMAKE_WATCOM_RUNTIME_LIBRARY_DEFAULT";
 std::string const kCMAKE_MSVC_DEBUG_INFORMATION_FORMAT_DEFAULT =
@@ -248,7 +248,7 @@ Arguments cmCoreTryCompile::ParseArgs(
     for (auto const& i : unparsedArguments) {
       m = cmStrCat(m, "\n  \"", i, '"');
     }
-    this->Makefile->IssueMessage(MessageType::AUTHOR_WARNING, m);
+    this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, m);
   }
   return arguments;
 }
@@ -758,7 +758,7 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
             "(e.g. CMAKE_C_FLAGS_DEBUG) in the test project."
             ;
           /* clang-format on */
-          this->Makefile->IssueMessage(MessageType::AUTHOR_WARNING, w.str());
+          this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, w.str());
         }
         CM_FALLTHROUGH;
       case cmPolicies::OLD:
@@ -1048,7 +1048,7 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
       for (std::string const& vi : warnCMP0067Variables) {
         w << "  " << vi << "\n";
       }
-      this->Makefile->IssueMessage(MessageType::AUTHOR_WARNING, w.str());
+      this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, w.str());
     }
 
     for (auto const& p : arguments.LangProps) {
@@ -1136,7 +1136,6 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
     vars.insert(kCMAKE_SYSROOT);
     vars.insert(kCMAKE_SYSROOT_COMPILE);
     vars.insert(kCMAKE_SYSROOT_LINK);
-    vars.insert(kCMAKE_WARN_DEPRECATED);
     vars.emplace("CMAKE_MSVC_RUNTIME_LIBRARY"_s);
     vars.emplace("CMAKE_WATCOM_RUNTIME_LIBRARY"_s);
     vars.emplace("CMAKE_MSVC_DEBUG_INFORMATION_FORMAT"_s);

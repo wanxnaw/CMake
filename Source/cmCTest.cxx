@@ -42,6 +42,7 @@
 
 #include "cm_parse_date.h"
 
+#include "cmCMakePresetsArgs.h"
 #include "cmCMakePresetsGraph.h"
 #include "cmCTestBuildAndTest.h"
 #include "cmCTestScriptHandler.h"
@@ -1501,13 +1502,13 @@ bool cmCTest::AddVariableDefinition(std::string const& arg)
   return false;
 }
 
-bool cmCTest::SetArgsFromPreset(std::string const& presetName,
-                                bool listPresets)
+bool cmCTest::SetArgsFromPreset(cmCMakePresetsArgs const& args)
 {
   auto const workingDirectory = cmSystemTools::GetLogicalWorkingDirectory();
 
   cmCMakePresetsGraph settingsFile;
-  auto result = settingsFile.ReadProjectPresets(workingDirectory);
+  auto result =
+    settingsFile.ReadProjectPresets(workingDirectory, args.PresetsFile);
   if (result != true) {
     cmSystemTools::Error(cmStrCat("Could not read presets from ",
                                   workingDirectory, ":\n",
@@ -1515,40 +1516,23 @@ bool cmCTest::SetArgsFromPreset(std::string const& presetName,
     return false;
   }
 
-  if (listPresets) {
+  if (args.ListPresets) {
     settingsFile.PrintTestPresetList();
     return true;
   }
 
-  auto presetPair = settingsFile.TestPresets.find(presetName);
-  if (presetPair == settingsFile.TestPresets.end()) {
-    cmSystemTools::Error(cmStrCat("No such test preset in ", workingDirectory,
-                                  ": \"", presetName, '"'));
+  auto resolveResult =
+    settingsFile.ResolvePreset(args.PresetName, settingsFile.TestPresets);
+  auto resolveError =
+    cmCMakePresetsGraph::FormatPresetError<cmCMakePresetsGraph::TestPreset>(
+      resolveResult.StatusCode, resolveResult.ErrorPresetName,
+      workingDirectory);
+  if (resolveError) {
+    cmSystemTools::Error(*resolveError);
     settingsFile.PrintTestPresetList();
     return false;
   }
-
-  if (presetPair->second.Unexpanded.Hidden) {
-    cmSystemTools::Error(cmStrCat("Cannot use hidden test preset in ",
-                                  workingDirectory, ": \"", presetName, '"'));
-    settingsFile.PrintTestPresetList();
-    return false;
-  }
-
-  auto const& expandedPreset = presetPair->second.Expanded;
-  if (!expandedPreset) {
-    cmSystemTools::Error(cmStrCat("Could not evaluate test preset \"",
-                                  presetName, "\": Invalid macro expansion"));
-    settingsFile.PrintTestPresetList();
-    return false;
-  }
-
-  if (!expandedPreset->ConditionResult) {
-    cmSystemTools::Error(cmStrCat("Cannot use disabled test preset in ",
-                                  workingDirectory, ": \"", presetName, '"'));
-    settingsFile.PrintTestPresetList();
-    return false;
-  }
+  auto const* expandedPreset = resolveResult.Preset;
 
   auto configurePresetPair =
     settingsFile.ConfigurePresets.find(expandedPreset->ConfigurePreset);
@@ -1818,8 +1802,7 @@ int cmCTest::Run(std::vector<std::string> const& args)
   bool processSteps = false;
   bool SRArgumentSpecified = false;
   std::vector<std::pair<std::string, bool>> runScripts;
-  bool listPresets = false;
-  std::string presetName;
+  cmCMakePresetsArgs presetsArgs;
 
   // copy the command line
   cm::append(this->Impl->InitialCommandLineArguments, args);
@@ -2007,14 +1990,21 @@ int cmCTest::Run(std::vector<std::string> const& args)
 
   auto const presetArguments = std::vector<CommandArgument>{
     CommandArgument{ "--list-presets", CommandArgument::Values::Zero,
-                     [&listPresets](std::string const&) -> bool {
-                       listPresets = true;
+                     [&presetsArgs](std::string const&) -> bool {
+                       presetsArgs.ListPresets = true;
                        return true;
                      } },
     CommandArgument{ "--preset", "'--preset' requires an argument",
                      CommandArgument::Values::One,
-                     [&presetName](std::string const& presetArg) -> bool {
-                       presetName = presetArg;
+                     [&presetsArgs](std::string const& presetArg) -> bool {
+                       presetsArgs.PresetName = presetArg;
+                       return true;
+                     } },
+    CommandArgument{ "--presets-file", "'--presets-file' requires an argument",
+                     CommandArgument::Values::One,
+                     [&presetsArgs](std::string const& presetFileArg) -> bool {
+                       presetsArgs.PresetsFile =
+                         cmSystemTools::ToNormalizedPathOnDisk(presetFileArg);
                        return true;
                      } }
   };
@@ -2507,9 +2497,9 @@ int cmCTest::Run(std::vector<std::string> const& args)
     }
   }
 
-  if (listPresets || !presetName.empty()) {
-    bool success = this->SetArgsFromPreset(presetName, listPresets);
-    if (listPresets) {
+  if (presetsArgs.HasPresetsArg()) {
+    bool success = this->SetArgsFromPreset(presetsArgs);
+    if (presetsArgs.ListPresets) {
       return static_cast<int>(!success);
     }
     if (!success) {
@@ -2624,8 +2614,8 @@ int cmCTest::Run(std::vector<std::string> const& args)
     }
   }
 
-  // TestProgressOutput only supported if console supports it and not logging
-  // to a file
+  // TestProgressOutput only supported if console supports it and not
+  // logging to a file
   this->Impl->TestProgressOutput = this->Impl->TestProgressOutput &&
     !this->Impl->OutputLogFile && this->ProgressOutputSupportedByConsole();
 #ifdef _WIN32
@@ -3277,6 +3267,7 @@ void cmCTest::SetCMakeVariables(cmMakefile& mf)
 
   // CTest Test Step
   set("CTEST_TEST_TIMEOUT", "TimeOut");
+  set("CTEST_TEST_COVERAGE_TOOL", "CTestTestCoverageTool");
 
   // CTest Coverage Step
   set("CTEST_COVERAGE_COMMAND", "CoverageCommand");

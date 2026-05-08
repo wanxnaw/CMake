@@ -26,6 +26,7 @@
 #include "cmCryptoHash.h"
 #include "cmCxxModuleMetadata.h"
 #include "cmCxxModuleUsageEffects.h"
+#include "cmDiagnostics.h"
 #include "cmExperimental.h"
 #include "cmFileSet.h"
 #include "cmFileSetMetadata.h"
@@ -827,8 +828,8 @@ bool cmGeneratorTarget::IsIPOEnabled(std::string const& lang,
       w << cmPolicies::GetPolicyWarning(cmPolicies::CMP0069) << "\n";
       w << "INTERPROCEDURAL_OPTIMIZATION property will be ignored for target "
         << "'" << this->GetName() << "'.";
-      this->LocalGenerator->GetCMakeInstance()->IssueMessage(
-        MessageType::AUTHOR_WARNING, w.str(), this->GetBacktrace());
+      this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, w.str(),
+                                      this->GetBacktrace());
 
       this->PolicyReportedCMP0069 = true;
     }
@@ -2580,8 +2581,8 @@ void cmGeneratorTarget::AddCUDAArchitectureFlags(cmBuildStep compileOrLink,
     switch (this->GetPolicyStatusCMP0104()) {
       case cmPolicies::WARN:
         if (!this->LocalGenerator->GetCMakeInstance()->GetIsInTryCompile()) {
-          this->Makefile->IssueMessage(
-            MessageType::AUTHOR_WARNING,
+          this->Makefile->IssueDiagnostic(
+            cmDiagnostics::CMD_AUTHOR,
             cmPolicies::GetPolicyWarning(cmPolicies::CMP0104) +
               "\nCUDA_ARCHITECTURES is empty for target \"" + this->GetName() +
               "\".");
@@ -2806,6 +2807,34 @@ void cmGeneratorTarget::AddRustTargetFlags(std::string& flags) const
   cmValue const edition = this->GetProperty("Rust_EDITION");
   if (edition && !edition->empty()) {
     flags += " --edition=" + *edition;
+  }
+}
+
+void cmGeneratorTarget::AddSwiftTargetFlags(std::string& flags) const
+{
+  if (cmValue version = GetProperty("Swift_LANGUAGE_VERSION")) {
+    if (cmSystemTools::VersionCompare(
+          cmSystemTools::OP_GREATER_EQUAL,
+          this->Makefile->GetDefinition("CMAKE_Swift_COMPILER_VERSION"),
+          "4.2")) {
+      flags += " -swift-version " + *version;
+    }
+  }
+
+  if (!this->GetGlobalGenerator()->IsXcode() &&
+      cmSystemTools::VersionCompare(
+        cmSystemTools::OP_GREATER_EQUAL,
+        this->Makefile->GetDefinition("CMAKE_Swift_COMPILER_VERSION"),
+        "5.8")) {
+    // Note: The Xcode generator sets the `SWIFT_PACKAGE_NAME` BuildSettings
+    //       attribute
+    std::string const packageName = this->GetSwiftPackageName();
+    if (!packageName.empty()) {
+      std::string const packageFlag =
+        this->Makefile->GetSafeDefinition("CMAKE_Swift_PACKAGE_NAME_FLAG");
+      // Add the package name to the flags
+      flags += " " + packageFlag + " " + packageName;
+    }
   }
 }
 
@@ -6170,9 +6199,26 @@ std::string cmGeneratorTarget::BuildDatabasePath(
                   "_build_database.json");
 }
 
+std::string cmGeneratorTarget::GetSwiftPackageName() const
+{
+  std::string packageName;
+  if (cmValue projectName = this->GetProperty("Swift_PACKAGE_NAME")) {
+    packageName = *projectName;
+  } else if (this->GetPolicyStatusCMP0216() == cmPolicies::NEW) {
+    packageName = this->Makefile->GetSafeDefinition("PROJECT_NAME");
+  }
+  return packageName;
+}
+
 std::string cmGeneratorTarget::GetSwiftModuleName() const
 {
-  return this->GetPropertyOrDefault("Swift_MODULE_NAME", this->GetName());
+  if (cmValue name = this->GetProperty("Swift_MODULE_NAME")) {
+    return *name;
+  }
+  // Hyphens are not valid in Swift module identifiers.
+  std::string name = this->GetName();
+  std::replace(name.begin(), name.end(), '-', '_');
+  return name;
 }
 
 std::string cmGeneratorTarget::GetSwiftModuleFileName() const

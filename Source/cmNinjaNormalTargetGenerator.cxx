@@ -498,8 +498,15 @@ void cmNinjaNormalTargetGenerator::WriteLinkRule(
     }
 
     // build response file name
-    std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_LINK_FLAG";
-    cmValue flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+    cmValue flag;
+    if (targetType == cmStateEnums::STATIC_LIBRARY) {
+      std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_ARCHIVE_FLAG";
+      flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+    }
+    if (!flag) {
+      std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_LINK_FLAG";
+      flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+    }
 
     if (flag) {
       responseFlag = *flag;
@@ -1041,7 +1048,8 @@ void cmNinjaNormalTargetGenerator::WriteNvidiaDeviceLinkStatement(
                               vars["LINK_FLAGS"], frameworkPath, linkPath,
                               genTarget);
 
-  this->addPoolNinjaVariable("JOB_POOL_LINK", genTarget, nullptr, vars);
+  this->addPoolNinjaVariable("JOB_POOL_LINK", config, genTarget, nullptr,
+                             vars);
 
   vars["MANIFESTS"] = this->GetManifests(config);
 
@@ -1384,7 +1392,7 @@ void cmNinjaNormalTargetGenerator::WriteLinkStatement(
                            this->TargetLinkLanguage(config), "CURRENT", false);
   }
 
-  this->addPoolNinjaVariable("JOB_POOL_LINK", gt, nullptr, vars);
+  this->addPoolNinjaVariable("JOB_POOL_LINK", config, gt, nullptr, vars);
 
   this->UseLWYU = this->GetLocalGenerator()->AppendLWYUFlags(
     vars["LINK_FLAGS"], this->GetGeneratorTarget(),
@@ -1589,9 +1597,15 @@ void cmNinjaNormalTargetGenerator::WriteLinkStatement(
     cmStrCat("CMAKE_", this->TargetLinkLanguage(config));
 
   // build response file name
-  std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_LINK_FLAG";
-
-  cmValue flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+  cmValue flag;
+  if (targetType == cmStateEnums::STATIC_LIBRARY) {
+    std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_ARCHIVE_FLAG";
+    flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+  }
+  if (!flag) {
+    std::string cmakeLinkVar = cmakeVarLang + "_RESPONSE_FILE_LINK_FLAG";
+    flag = this->GetMakefile()->GetDefinition(cmakeLinkVar);
+  }
 
   bool const lang_supports_response =
     !(this->TargetLinkLanguage(config) == "RC" ||
@@ -1639,16 +1653,25 @@ void cmNinjaNormalTargetGenerator::WriteLinkStatement(
     if (cmComputeLinkInformation* cli =
           this->GeneratorTarget->GetLinkInformation(config)) {
       for (auto const& dependency : cli->GetItems()) {
-        // Both the current target and the linked target must be swift targets
-        // in order for there to be a swiftmodule to depend on
+        // Only depend on swiftmodule from targets that actually compile
+        // Swift sources. A C/C++ target may have Swift as its linker
+        // language (due to language propagation) without producing one.
         if (dependency.Target &&
-            dependency.Target->GetLinkerLanguage(config) == "Swift") {
+            dependency.Target->IsLanguageUsed("Swift", config)) {
           std::string swiftmodule = this->ConvertToNinjaPath(
             dependency.Target->GetSwiftModulePath(config));
           linkBuild.ImplicitDeps.emplace_back(swiftmodule);
         }
       }
     }
+  }
+
+  // For split Swift builds, ensure the link edge depends on the target's own
+  // .swiftmodule so the emit-module edge runs even when no other target in
+  // the build depends on it (e.g. install-only targets).
+  std::string swiftModuleOutput = this->GetSwiftModuleOutput(config);
+  if (!swiftModuleOutput.empty()) {
+    linkBuild.ImplicitDeps.emplace_back(std::move(swiftModuleOutput));
   }
 
   // Ninja should restat after linking if and only if there are byproducts.

@@ -109,8 +109,8 @@ The options are:
 
   .. versionadded:: 3.29
 
-    The ``<level>`` may be omitted, or ``0``, to let ctest use a default
-    level of parallelism, or unbounded parallelism, respectively, as
+    The ``<level>`` may be omitted, or ``0``, to let :manual:`ctest(1)` use a
+    default level of parallelism, or unbounded parallelism, respectively, as
     documented by the :option:`ctest --parallel` option.
 
 ``RESOURCE_SPEC_FILE <file>``
@@ -170,8 +170,9 @@ The options are:
 ``CAPTURE_CMAKE_ERROR <result-var>``
   .. versionadded:: 3.7
 
-  Store in the ``<result-var>`` variable -1 if there are any errors running
-  the command and prevent ctest from returning non-zero if an error occurs.
+  Store in the ``<result-var>`` variable ``-1`` if there are any errors running
+  the command and prevent :manual:`ctest(1)` from returning non-zero if an
+  error occurs.
 
 ``OUTPUT_JUNIT <file>``
   .. versionadded:: 3.21
@@ -181,6 +182,13 @@ The options are:
   already exists, it will be overwritten. Note that the resulting JUnit XML
   file is **not** uploaded to CDash because it would be redundant with
   CTest's ``Test.xml`` file.
+
+``COVERAGE_TOOL <tool>``
+  .. versionadded:: 4.4
+
+  Specify the ``<tool>`` used for collecting coverage during the running
+  of the tests.  See the CTest :ref:`CoverageTool <ctest-CoverageTool>`
+  setting for details.
 
 ``QUIET``
   .. versionadded:: 3.3
@@ -194,9 +202,9 @@ See also the :variable:`CTEST_CUSTOM_MAXIMUM_PASSED_TEST_OUTPUT_SIZE`,
 :variable:`CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE` and
 :variable:`CTEST_CUSTOM_TEST_OUTPUT_TRUNCATION` variables, along with their
 corresponding :manual:`ctest(1)` command line options
-:option:`--test-output-size-passed <ctest --test-output-size-passed>`,
-:option:`--test-output-size-failed <ctest --test-output-size-failed>`, and
-:option:`--test-output-truncation <ctest --test-output-truncation>`.
+:ctest-option:`--test-output-size-passed`,
+:ctest-option:`--test-output-size-failed`, and
+:ctest-option:`--test-output-truncation`.
 
 .. _`Additional Test Measurements`:
 

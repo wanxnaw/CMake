@@ -26,6 +26,7 @@
 #include "cmCustomCommandGenerator.h"
 #include "cmCustomCommandLines.h"
 #include "cmCustomCommandTypes.h"
+#include "cmDiagnostics.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorFileSet.h"
@@ -2715,11 +2716,20 @@ void cmGlobalXCodeGenerator::CreateBuildSettings(cmGeneratorTarget* gtgt,
         case cmSwiftCompileMode::Singlefile:
           break;
         case cmSwiftCompileMode::Unknown:
-          this->CurrentLocalGenerator->IssueMessage(
-            MessageType::AUTHOR_WARNING,
+          this->CurrentLocalGenerator->IssueDiagnostic(
+            cmDiagnostics::CMD_AUTHOR,
             cmStrCat("Unknown Swift_COMPILATION_MODE on target '",
                      gtgt->GetName(), '\''));
           break;
+      }
+    }
+
+    // Add SWIFT_PACKAGE_NAME
+    if (this->XcodeVersion >= 150) {
+      std::string const packageName = gtgt->GetSwiftPackageName();
+      if (!packageName.empty()) {
+        buildSettings->AddAttribute("SWIFT_PACKAGE_NAME",
+                                    this->CreateString(packageName));
       }
     }
   }
@@ -4553,7 +4563,7 @@ bool cmGlobalXCodeGenerator::CreateGroups(
 
       auto addSourceToGroup = [this, &gtgt,
                                &generator](std::string const& source) {
-        cmSourceGroup* sourceGroup = generator->FindSourceGroup(source);
+        cmSourceGroup const* sourceGroup = generator->FindSourceGroup(source);
         cmXCodeObject* pbxgroup =
           this->CreateOrGetPBXGroup(gtgt.get(), sourceGroup);
         std::string key = GetGroupMapKeyFromPath(gtgt.get(), source);
@@ -4629,7 +4639,7 @@ cmXCodeObject* cmGlobalXCodeGenerator::CreatePBXGroup(cmXCodeObject* parent,
 }
 
 cmXCodeObject* cmGlobalXCodeGenerator::CreateOrGetPBXGroup(
-  cmGeneratorTarget* gtgt, cmSourceGroup* sg)
+  cmGeneratorTarget* gtgt, cmSourceGroup const* sg)
 {
   std::string s;
   std::string target;

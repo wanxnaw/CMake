@@ -18,6 +18,7 @@
 #include <cm/optional>
 #include <cm/string_view>
 
+#include "cmDiagnostics.h"
 #include "cmFileSetMetadata.h"
 #include "cmGenExContext.h"
 #include "cmGeneratedFileStream.h"
@@ -88,8 +89,11 @@ bool cmGeneratorTarget::AddHeaderSetVerification()
     std::set<cmGeneratorFileSet const*> fileSets;
     for (auto const& fileSet : fileSetEntries) {
       if (all || verifySet.count(fileSet->GetName())) {
-        fileSets.insert(fileSet);
         verifySet.erase(fileSet->GetName());
+        if (fileSet->GetProperty("SKIP_LINTING").IsOn()) {
+          continue;
+        }
+        fileSets.insert(fileSet);
       }
     }
 
@@ -99,8 +103,8 @@ bool cmGeneratorTarget::AddHeaderSetVerification()
           this->GetType() == cmStateEnums::EXECUTABLE &&
           !this->GetPropertyAsBool("ENABLE_EXPORTS")) {
         if (cmp0209 == cmPolicies::WARN && !fileSets.empty()) {
-          this->Makefile->IssueMessage(
-            MessageType::AUTHOR_WARNING,
+          this->Makefile->IssueDiagnostic(
+            cmDiagnostics::CMD_AUTHOR,
             cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0209),
                      "\n"
                      "Executable target \"",

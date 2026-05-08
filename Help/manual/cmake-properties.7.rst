@@ -84,7 +84,6 @@ Properties on Directories
    /prop_dir/LINK_DIRECTORIES
    /prop_dir/LINK_OPTIONS
    /prop_dir/LISTFILE_STACK
-   /prop_dir/MACROS
    /prop_dir/PARENT_DIRECTORY
    /prop_dir/RULE_LAUNCH_COMPILE
    /prop_dir/RULE_LAUNCH_CUSTOM
@@ -427,6 +426,8 @@ Properties on Targets
    /prop_tgt/Swift_LANGUAGE_VERSION
    /prop_tgt/Swift_MODULE_DIRECTORY
    /prop_tgt/Swift_MODULE_NAME
+   /prop_tgt/Swift_PACKAGE_NAME
+   /prop_tgt/Swift_SEPARATE_MODULE_EMISSION
    /prop_tgt/SYMBOLIC
    /prop_tgt/SYSTEM
    /prop_tgt/TEST_LAUNCHER
@@ -544,12 +545,15 @@ Properties on File Sets
    /prop_fs/COMPILE_DEFINITIONS
    /prop_fs/COMPILE_OPTIONS
    /prop_fs/CXX_SCAN_FOR_MODULES
+   /prop_fs/JOB_POOL_COMPILE
    /prop_fs/INCLUDE_DIRECTORIES
+   /prop_fs/INDEPENDENT_FILES
    /prop_fs/INTERFACE_COMPILE_DEFINITIONS
    /prop_fs/INTERFACE_COMPILE_OPTIONS
    /prop_fs/INTERFACE_INCLUDE_DIRECTORIES
    /prop_fs/INTERFACE_SOURCES
    /prop_fs/SCOPE
+   /prop_fs/SKIP_LINTING
    /prop_fs/SOURCES
    /prop_fs/TYPE
 
@@ -699,6 +703,7 @@ Deprecated Properties on Directories
    /prop_dir/COMPILE_DEFINITIONS_CONFIG
    /prop_dir/INTERPROCEDURAL_OPTIMIZATION
    /prop_dir/INTERPROCEDURAL_OPTIMIZATION_CONFIG
+   /prop_dir/MACROS
    /prop_dir/TEST_INCLUDE_FILE
 
 

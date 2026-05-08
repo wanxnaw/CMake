@@ -48,11 +48,9 @@ if(NOT CMAKE_Fortran_COMPILER_WORKS)
   # Puts test result in cache variable.
   try_compile(CMAKE_Fortran_COMPILER_WORKS
     SOURCE_FROM_VAR testFortranCompiler.f __TestCompiler_testFortranCompilerSource
+    NO_CACHE
     OUTPUT_VARIABLE OUTPUT)
   unset(__TestCompiler_testFortranCompilerSource)
-  # Move result from cache to normal variable.
-  set(CMAKE_Fortran_COMPILER_WORKS ${CMAKE_Fortran_COMPILER_WORKS})
-  unset(CMAKE_Fortran_COMPILER_WORKS CACHE)
   if(NOT CMAKE_Fortran_COMPILER_WORKS)
     PrintTestCompilerResult(CHECK_FAIL "broken")
     string(REPLACE "\n" "\n  " _output "${OUTPUT}")
@@ -67,7 +65,7 @@ endif()
 # Test for Fortran 90 support by using an f90-specific construct.
 if(NOT DEFINED CMAKE_Fortran_COMPILER_SUPPORTS_F90)
   message(CHECK_START "Checking whether ${CMAKE_Fortran_COMPILER} supports Fortran 90")
-  set(__TestCompiler_testFortranCompilerSource "
+  set(__TestCompiler_testFortranCompilerF90Source "
     PROGRAM TESTFortran90
     integer stop ; stop = 1 ; do while ( stop .eq. 0 ) ; end do
     END PROGRAM TESTFortran90

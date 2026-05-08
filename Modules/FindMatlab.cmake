@@ -1083,6 +1083,7 @@ function(matlab_get_mex_suffix matlab_root mex_suffix)
     OUTPUT_VARIABLE _matlab_mex_extension
     ERROR_VARIABLE _matlab_mex_extension_error
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _matlab_mex_extension_result
     ${devnull})
 
   if(_matlab_mex_extension_error)
@@ -1616,6 +1617,7 @@ function(_Matlab_get_version_from_root matlab_root matlab_or_mcr matlab_known_ve
 
       find_program(
           _matlab_current_program
+          NO_CACHE
           NAMES matlab
           ${_find_matlab_options}
           DOC "Matlab main program"
@@ -1631,14 +1633,12 @@ function(_Matlab_get_version_from_root matlab_root matlab_or_mcr matlab_known_ve
       set(Matlab_VERSION_STRING_INTERNAL "" CACHE INTERNAL "internal matlab location for the discovered version")
       set(Matlab_OR_MCR_INTERNAL ${matlab_or_mcr} CACHE INTERNAL "Whether Matlab root contains MATLAB or MCR")
       unset(_matlab_current_program)
-      unset(_matlab_current_program CACHE)
       return()
     endif()
 
     # full real path for path comparison
     get_filename_component(_matlab_main_real_path_tmp "${_matlab_current_program}" REALPATH)
     unset(_matlab_current_program)
-    unset(_matlab_current_program CACHE)
 
     # is it the same as the previous one?
     if(_matlab_main_real_path_tmp STREQUAL Matlab_PROG_VERSION_STRING_AUTO_DETECT)
@@ -1790,6 +1790,7 @@ function(_Matlab_find_instances_from_path matlab_roots)
   # If set by the user, this won't change.
   find_program(
     _matlab_main_tmp
+    NO_CACHE
     NAMES matlab)
 
   if(_matlab_main_tmp)
@@ -1809,11 +1810,11 @@ function(_Matlab_find_instances_from_path matlab_roots)
     # We found the Matlab program
     list(APPEND _matlab_possible_roots "MATLAB" "NOTFOUND" ${_matlab_current_location})
 
-    # we remove this from the CACHE
-    unset(_matlab_main_tmp CACHE)
+    unset(_matlab_main_tmp)
   else()
     find_program(
       _matlab_mex_tmp
+      NO_CACHE
       NAMES mex)
     if(_matlab_mex_tmp)
       # we then populate the list of roots, with empty version
@@ -1832,7 +1833,7 @@ function(_Matlab_find_instances_from_path matlab_roots)
       # We found the Matlab program
       list(APPEND _matlab_possible_roots "MCR" "NOTFOUND" ${_mex_current_location})
 
-      unset(_matlab_mex_tmp CACHE)
+      unset(_matlab_mex_tmp)
     else()
       if(MATLAB_FIND_DEBUG)
         message(STATUS "[MATLAB] mex compiler not found")

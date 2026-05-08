@@ -43,7 +43,7 @@ Synopsis
     file(`COPY_FILE`_ <oldname> <newname> [...])
     file({`COPY`_ | `INSTALL`_} <file>... DESTINATION <dir> [...])
     file(`SIZE`_ <filename> <out-var>)
-    file(`READ_SYMLINK`_ <linkname> <out-var>)
+    file(`READ_SYMLINK`_ <linkname> <out-var> [...])
     file(`CREATE_LINK`_ <original> <linkname> [...])
     file(`CHMOD`_ <files>... <directories>... PERMISSIONS <permissions>... [...])
     file(`CHMOD_RECURSE`_ <files>... <directories>... PERMISSIONS <permissions>... [...])
@@ -577,13 +577,21 @@ Filesystem
   pointing to a file and is readable.
 
 .. signature::
-  file(READ_SYMLINK <linkname> <variable>)
+  file(READ_SYMLINK <linkname> <variable> [RESULT <result>])
 
   .. versionadded:: 3.14
 
   Query the symlink ``<linkname>`` and stores the path it points to
-  in the result ``<variable>``.  If ``<linkname>`` does not exist
-  or is not a symlink, CMake issues a fatal error.
+  in the result ``<variable>``.
+
+  The options are:
+
+  ``RESULT <result>``
+    .. versionadded:: 4.4
+
+    Capture the status of the operation in a ``<result>`` variable.  The
+    variable is set to ``0`` on success or an error message otherwise.
+    If not specified, and the operation fails, a fatal error is emitted.
 
   Note that this command returns the raw symlink path and does not resolve
   a relative path.  The following is an example of how to ensure that an
@@ -606,7 +614,7 @@ Filesystem
 
   Create a link ``<linkname>`` that points to ``<original>``.
   It will be a hard link by default, but providing the ``SYMBOLIC`` option
-  results in a symbolic link instead.  Hard links require that ``original``
+  results in a symbolic link instead.  Hard links require that ``<original>``
   exists and is a file, not a directory.  If ``<linkname>`` already exists,
   it will be overwritten.
 
@@ -619,9 +627,13 @@ Filesystem
   creating the link fails.  It can be useful for handling situations such as
   ``<original>`` and ``<linkname>`` being on different drives or mount points,
   which would make them unable to support a hard link.
-  If the source is a directory, the destination directory will be created if
-  it does not exist.  Contents of the source directory will be copied to the
-  destination directory unless policy :policy:`CMP0205` is not set to ``NEW``.
+
+  .. versionchanged:: 4.3
+
+    If the source is a directory, CMake versions prior to 4.3 will create the
+    destination directory if it does not exist, but not copy any files.
+    With CMake 4.3 and above, the contents of the source directory will be
+    copied recursively to the destination.  See policy :policy:`CMP0205`.
 
 .. signature::
   file(CHMOD <files>... <directories>...

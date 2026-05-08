@@ -184,10 +184,13 @@ add_RunCMake_test(CMP0187)
 if(WIN32)
   add_RunCMake_test(CMP0212)
 endif()
+add_RunCMake_test(CMP0217)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
   add_RunCMake_test(CMP0194 -DCMAKE_C_COMPILER_VERSION=${CMAKE_C_COMPILER_VERSION})
 endif()
+
+add_RunCMake_test(CMP0218)
 
 # The test for Policy 65 requires the use of the
 # CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS variable, which both the VS and Xcode
@@ -624,6 +627,7 @@ add_RunCMake_test(TargetObjects)
 add_RunCMake_test(TargetProperties)
 add_RunCMake_test(FileSetProperties)
 add_RunCMake_test(FileSet-SOURCES -DCMAKE_C_COMPILER_ID=${CMAKE_C_COMPILER_ID}
+                                  -DCMAKE_C_OUTPUT_EXTENSION=${CMAKE_C_OUTPUT_EXTENSION}
                                   -DMSVC_VERSION=${MSVC_VERSION})
 add_RunCMake_test(ToolchainFile)
 
@@ -1229,8 +1233,9 @@ if("${CMAKE_GENERATOR}" MATCHES "Make|Ninja|FASTBuild")
   if(UNIX AND NOT CYGWIN)
     execute_process(COMMAND ldd --help
       OUTPUT_VARIABLE LDD_HELP
-      ERROR_VARIABLE LDD_ERR)
-    if("${LDD_HELP}" MATCHES
+      ERROR_VARIABLE LDD_ERR
+      RESULT_VARIABLE LDD_RESULT)
+    if(LDD_RESULT EQUAL 0 AND "${LDD_HELP}" MATCHES
         "(-r, --function-relocs.*process data and function relocations.*-u, --unused.*print unused direct dependencies)")
       add_RunCMake_test(LinkWhatYouUse)
     endif()
@@ -1352,7 +1357,9 @@ endif()
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "e2k" AND NOT DEFINED CMake_TEST_E2K_BROKEN_LIBC)
   # Exclude tests that fail due to a broken libc version on Elbrus.
   find_program(DPKG_QUERY "dpkg-query" )
-  execute_process(COMMAND "${DPKG_QUERY}" "-f" "\${Version}" "-W" "glibc" OUTPUT_VARIABLE LIBC_VERSION)
+  execute_process(COMMAND "${DPKG_QUERY}" "-f" "\${Version}" "-W" "glibc"
+    OUTPUT_VARIABLE LIBC_VERSION
+    RESULT_VARIABLE _result_libc)
   if(LIBC_VERSION MATCHES "2.29-25.*")
     list(REMOVE_ITEM cpack_tests
       DEB.DEFAULT_PERMISSIONS
