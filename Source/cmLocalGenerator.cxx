@@ -9,7 +9,6 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <iterator>
-#include <queue>
 #include <sstream>
 #include <unordered_set>
 #include <utility>
@@ -32,9 +31,11 @@
 #include "cmCustomCommandGenerator.h"
 #include "cmCustomCommandLines.h"
 #include "cmCustomCommandTypes.h"
+#include "cmFileSetMetadata.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorExpressionEvaluationFile.h"
+#include "cmGeneratorFileSet.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
 #include "cmInstallGenerator.h"
@@ -60,6 +61,7 @@
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
+#include "cmTargetTypes.h"
 #include "cmTestGenerator.h"
 #include "cmValue.h"
 #include "cmake.h"
@@ -246,11 +248,19 @@ void cmLocalGenerator::IssueMessage(MessageType type, std::string const& text,
   this->GetMakefile()->IssueMessage(type, text, bt);
 }
 
-void cmLocalGenerator::IssueDiagnostic(cmDiagnosticCategory category,
-                                       std::string const& text,
-                                       cmListFileBacktrace const& bt) const
+void cmLocalGenerator::IssueDiagnostic(
+  cmDiagnosticCategory category, std::string const& text,
+  cmDiagnosticContext const& context) const
 {
-  this->GetMakefile()->IssueDiagnostic(category, text, bt);
+  this->GetMakefile()->IssueDiagnostic(category, text, context);
+}
+
+void cmLocalGenerator::IssuePolicyWarning(cmPolicies::PolicyID policy,
+                                          cm::string_view preface,
+                                          cm::string_view postface,
+                                          cmListFileBacktrace const& bt) const
+{
+  this->GetMakefile()->IssuePolicyWarning(policy, preface, postface, bt);
 }
 
 void cmLocalGenerator::ComputeObjectMaxPath()
@@ -717,9 +727,7 @@ void cmLocalGenerator::GenerateInstallRules()
       if (haveInstallAfterSubdirectory &&
           this->Makefile->PolicyOptionalWarningEnabled(
             "CMAKE_POLICY_WARNING_CMP0082")) {
-        std::ostringstream e;
-        e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0082) << "\n";
-        this->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e.str());
+        this->IssuePolicyWarning(cmPolicies::CMP0082);
       }
       CM_FALLTHROUGH;
     case cmPolicies::OLD: {
@@ -1521,12 +1529,12 @@ void cmLocalGenerator::GetTargetFlags(
   }
 
   switch (target->GetType()) {
-    case cmStateEnums::STATIC_LIBRARY:
+    case cm::TargetType::STATIC_LIBRARY:
       linkFlags = this->GetStaticLibraryFlags(config, linkLanguage, target);
       break;
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       CM_FALLTHROUGH;
-    case cmStateEnums::SHARED_LIBRARY: {
+    case cm::TargetType::SHARED_LIBRARY: {
       if (this->IsSplitSwiftBuild() || linkLanguage != "Swift") {
         std::string libFlags;
         this->AddTargetTypeLinkerFlags(libFlags, target, linkLanguage, config);
@@ -1561,7 +1569,7 @@ void cmLocalGenerator::GetTargetFlags(
                                   frameworkPath, linkPath);
       }
     } break;
-    case cmStateEnums::EXECUTABLE: {
+    case cm::TargetType::EXECUTABLE: {
       if (linkLanguage != "Swift" ||
           (this->IsSplitSwiftBuild() &&
            target->GetPolicyStatusCMP0214() == cmPolicies::NEW)) {
@@ -1938,7 +1946,7 @@ std::string cmLocalGenerator::GetExeExportFlags(
   std::string linkFlags;
 
   // Flags to export symbols from an executable.
-  if (tgt.GetType() == cmStateEnums::EXECUTABLE &&
+  if (tgt.GetType() == cm::TargetType::EXECUTABLE &&
       this->StateSnapshot.GetState()->GetGlobalPropertyAsBool(
         "TARGET_SUPPORTS_SHARED_LIBS")) {
     // Only add the flags if ENABLE_EXPORTS is on,
@@ -2348,8 +2356,8 @@ bool cmLocalGenerator::GetRealDependency(std::string const& inName,
     // found is part of the inName
     if (cmSystemTools::FileIsFullPath(inName)) {
       std::string tLocation;
-      if (target->GetType() >= cmStateEnums::EXECUTABLE &&
-          target->GetType() <= cmStateEnums::MODULE_LIBRARY) {
+      if (target->GetType() >= cm::TargetType::EXECUTABLE &&
+          target->GetType() <= cm::TargetType::MODULE_LIBRARY) {
         tLocation = target->GetLocation(config);
         tLocation = cmSystemTools::GetFilenamePath(tLocation);
         tLocation = cmSystemTools::CollapseFullPath(tLocation);
@@ -2366,22 +2374,22 @@ bool cmLocalGenerator::GetRealDependency(std::string const& inName,
       }
     }
     switch (target->GetType()) {
-      case cmStateEnums::EXECUTABLE:
-      case cmStateEnums::STATIC_LIBRARY:
-      case cmStateEnums::SHARED_LIBRARY:
-      case cmStateEnums::MODULE_LIBRARY:
-      case cmStateEnums::UNKNOWN_LIBRARY:
+      case cm::TargetType::EXECUTABLE:
+      case cm::TargetType::STATIC_LIBRARY:
+      case cm::TargetType::SHARED_LIBRARY:
+      case cm::TargetType::MODULE_LIBRARY:
+      case cm::TargetType::UNKNOWN_LIBRARY:
         dep = target->GetFullPath(config, cmStateEnums::RuntimeBinaryArtifact,
                                   /*realname=*/true);
         return true;
-      case cmStateEnums::OBJECT_LIBRARY:
+      case cm::TargetType::OBJECT_LIBRARY:
         // An object library has no single file on which to depend.
         // This was listed to get the target-level dependency.
-      case cmStateEnums::INTERFACE_LIBRARY:
+      case cm::TargetType::INTERFACE_LIBRARY:
         // An interface library has no file on which to depend.
         // This was listed to get the target-level dependency.
-      case cmStateEnums::UTILITY:
-      case cmStateEnums::GLOBAL_TARGET:
+      case cm::TargetType::UTILITY:
+      case cm::TargetType::GLOBAL_TARGET:
         // A utility target has no file on which to depend.  This was listed
         // only to get the target-level dependency.
         return false;
@@ -2485,10 +2493,10 @@ void cmLocalGenerator::AddFeatureFlags(std::string& flags,
                                        std::string const& lang,
                                        std::string const& config)
 {
-  int targetType = target->GetType();
+  cm::TargetType const targetType = target->GetType();
 
-  bool shared = ((targetType == cmStateEnums::SHARED_LIBRARY) ||
-                 (targetType == cmStateEnums::MODULE_LIBRARY));
+  bool shared = ((targetType == cm::TargetType::SHARED_LIBRARY) ||
+                 (targetType == cm::TargetType::MODULE_LIBRARY));
 
   if (target->GetLinkInterfaceDependentBoolProperty(
         "POSITION_INDEPENDENT_CODE", config)) {
@@ -2501,11 +2509,11 @@ void cmLocalGenerator::AddFeatureFlags(std::string& flags,
 
 void cmLocalGenerator::AddPositionIndependentFlags(std::string& flags,
                                                    std::string const& lang,
-                                                   int targetType)
+                                                   cm::TargetType targetType)
 {
   std::string picFlags;
 
-  if (targetType == cmStateEnums::EXECUTABLE) {
+  if (targetType == cm::TargetType::EXECUTABLE) {
     picFlags = this->Makefile->GetSafeDefinition(
       cmStrCat("CMAKE_", lang, "_COMPILE_OPTIONS_PIE"));
   }
@@ -2631,13 +2639,10 @@ void cmLocalGenerator::AppendFlags(std::string& flags,
       if (!this->Makefile->GetCMakeInstance()->GetIsInTryCompile() &&
           this->Makefile->PolicyOptionalWarningEnabled(
             "CMAKE_POLICY_WARNING_CMP0181")) {
-        this->Makefile->IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0181),
-                   "\nSince the policy is not set, the contents of variable '",
-                   name,
-                   "' will "
-                   "be used as is."),
+        this->Makefile->IssuePolicyWarning(
+          cmPolicies::CMP0181, {},
+          cmStrCat("Since the policy is not set, the contents of variable '"_s,
+                   name, "' will be used as is."_s),
           target->GetBacktrace());
       }
       CM_FALLTHROUGH;
@@ -2741,9 +2746,12 @@ void cmLocalGenerator::AddPchDependencies(cmGeneratorTarget* target)
 
     for (std::string const& lang : langs) {
       auto langSources = std::count_if(
-        sources.begin(), sources.end(), [lang](cmSourceFile* sf) {
+        sources.begin(), sources.end(),
+        [&target, &config, &lang](cmSourceFile* sf) {
+          auto const* const fileSet = target->GetFileSetForSource(config, sf);
           return lang == sf->GetLanguage() &&
-            !sf->GetProperty("SKIP_PRECOMPILE_HEADERS");
+            !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+              sf->GetProperty("SKIP_PRECOMPILE_HEADERS"));
         });
       if (langSources == 0) {
         continue;
@@ -2869,9 +2877,9 @@ void cmLocalGenerator::AddPchDependencies(cmGeneratorTarget* target)
                   reuseTarget->GetPchFileObject(config, lang, arch);
               }
 
-              if (target->GetType() != cmStateEnums::OBJECT_LIBRARY) {
+              if (target->GetType() != cm::TargetType::OBJECT_LIBRARY) {
                 std::string linkerProperty = "LINK_FLAGS_";
-                if (target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+                if (target->GetType() == cm::TargetType::STATIC_LIBRARY) {
                   linkerProperty = "STATIC_LIBRARY_FLAGS_";
                 }
                 target->Target->AppendProperty(
@@ -2880,7 +2888,7 @@ void cmLocalGenerator::AddPchDependencies(cmGeneratorTarget* target)
                            this->ConvertToOutputFormat(pchSourceObj, SHELL)),
                   cm::nullopt, true);
               } else if (reuseTarget->GetType() ==
-                         cmStateEnums::OBJECT_LIBRARY) {
+                         cm::TargetType::OBJECT_LIBRARY) {
                 target->Target->AppendProperty(
                   "INTERFACE_LINK_LIBRARIES",
                   cmStrCat("$<$<CONFIG:", config,
@@ -3289,6 +3297,13 @@ void cmLocalGenerator::AddUnityBuild(cmGeneratorTarget* target)
     std::vector<cmSourceFile*> sources;
     target->GetSourceFiles(sources, configs[ci]);
     for (cmSourceFile* sf : sources) {
+      cmGeneratorFileSet const* fileSet =
+        target->GetFileSetForSource(configs[ci], sf);
+      if (fileSet &&
+          !cm::FileSetMetadata::GetAttributes(fileSet->GetType())
+             .contains(cm::FileSetMetadata::FileSetAttributes::UnityBuild)) {
+        continue;
+      }
       // Files which need C++ scanning cannot participate in unity builds as
       // there is a single place in TUs that may perform module-dependency bits
       // and a unity source cannot `#include` them in-order and represent a
@@ -3327,18 +3342,38 @@ void cmLocalGenerator::AddUnityBuild(cmGeneratorTarget* target)
 
   for (std::string lang : { "C", "CXX", "OBJC", "OBJCXX", "CUDA" }) {
     std::vector<UnityBatchedSource> filtered_sources;
-    std::copy_if(unitySources.begin(), unitySources.end(),
-                 std::back_inserter(filtered_sources),
-                 [&](UnityBatchedSource const& ubs) -> bool {
-                   cmSourceFile* sf = ubs.Source;
-                   return sf->GetLanguage() == lang &&
-                     !sf->GetPropertyAsBool("SKIP_UNITY_BUILD_INCLUSION") &&
-                     !sf->GetPropertyAsBool("HEADER_FILE_ONLY") &&
-                     !sf->GetProperty("COMPILE_OPTIONS") &&
-                     !sf->GetProperty("COMPILE_DEFINITIONS") &&
-                     !sf->GetProperty("COMPILE_FLAGS") &&
-                     !sf->GetProperty("INCLUDE_DIRECTORIES");
-                 });
+    std::copy_if(
+      unitySources.begin(), unitySources.end(),
+      std::back_inserter(filtered_sources),
+      [&](UnityBatchedSource const& ubs) -> bool {
+        cmSourceFile* sf = ubs.Source;
+        if (sf->GetLanguage() != lang) {
+          return false;
+        }
+        for (auto idx : ubs.Configs) {
+          cmGeneratorFileSet const* fileSet =
+            target->GetFileSetForSource(configs[idx], sf);
+          if (fileSet &&
+              (fileSet->GetProperty("SKIP_UNITY_BUILD_INCLUSION").IsOn() ||
+               fileSet->GetProperty(fileSet->BelongsTo(target)
+                                      ? "COMPILE_OPTIONS"
+                                      : "INTERFACE_COMPILE_OPTIONS") ||
+               fileSet->GetProperty(fileSet->BelongsTo(target)
+                                      ? "COMPILE_DEFINITIONS"
+                                      : "INTERFACE_COMPILE_DEFINITIONS") ||
+               fileSet->GetProperty(fileSet->BelongsTo(target)
+                                      ? "INCLUDE_DIRECTORIES"
+                                      : "INTERFACE_INCLUDE_DIRECTORIES"))) {
+            return false;
+          }
+        }
+        return !sf->GetPropertyAsBool("SKIP_UNITY_BUILD_INCLUSION") &&
+          !sf->GetPropertyAsBool("HEADER_FILE_ONLY") &&
+          !sf->GetProperty("COMPILE_OPTIONS") &&
+          !sf->GetProperty("COMPILE_DEFINITIONS") &&
+          !sf->GetProperty("COMPILE_FLAGS") &&
+          !sf->GetProperty("INCLUDE_DIRECTORIES");
+      });
 
     std::vector<UnitySource> unity_files;
     if (!unityMode || *unityMode == "BATCH") {
@@ -3384,9 +3419,9 @@ void cmLocalGenerator::AddPerLanguageLinkFlags(std::string& flags,
                                                std::string const& config)
 {
   switch (target->GetType()) {
-    case cmStateEnums::MODULE_LIBRARY:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::EXECUTABLE:
+    case cm::TargetType::MODULE_LIBRARY:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::EXECUTABLE:
       break;
     default:
       return;
@@ -3407,17 +3442,17 @@ void cmLocalGenerator::AddPerLanguageLinkFlags(std::string& flags,
       // Additionally, WARN at most once per language, instead of on every
       // target.
       if (!langLinkFlags.empty() &&
-          target->GetType() != cmStateEnums::EXECUTABLE &&
+          target->GetType() != cm::TargetType::EXECUTABLE &&
           langLinkFlags !=
             this->Makefile->GetSafeDefinition(
               cmStrCat("CMAKE_EXECUTABLE_CREATE_", lang, "_FLAGS")) &&
           this->GlobalGenerator->ShouldWarnCMP0210(lang)) {
-        this->IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0210), "\n",
-                   "For compatibility with older versions of CMake, ",
-                   "CMAKE_", lang, "_LINK_FLAGS will be ignored for all ",
-                   "non-EXECUTABLE targets which use these flags."));
+        this->IssuePolicyWarning(
+          cmPolicies::CMP0210, {},
+          cmStrCat("For compatibility with older versions of CMake, CMAKE_"_s,
+                   lang,
+                   "_LINK_FLAGS will be ignored for all non-EXECUTABLE "
+                   "targets which use these flags."_s));
       }
       CM_FALLTHROUGH;
     case cmPolicies::OLD:
@@ -3446,22 +3481,22 @@ void cmLocalGenerator::AppendTargetCreationLinkFlags(
   std::string createFlagsVar;
   cmValue createFlagsVal;
   switch (target->GetType()) {
-    case cmStateEnums::STATIC_LIBRARY:
+    case cm::TargetType::STATIC_LIBRARY:
       break;
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       createFlagsVar =
         cmStrCat("CMAKE_SHARED_MODULE_CREATE_", linkLanguage, "_FLAGS");
       createFlagsVal = this->Makefile->GetDefinition(createFlagsVar);
       // On some platforms we use shared library creation flags for modules.
       CM_FALLTHROUGH;
-    case cmStateEnums::SHARED_LIBRARY:
+    case cm::TargetType::SHARED_LIBRARY:
       if (!createFlagsVal) {
         createFlagsVar =
           cmStrCat("CMAKE_SHARED_LIBRARY_CREATE_", linkLanguage, "_FLAGS");
         createFlagsVal = this->Makefile->GetDefinition(createFlagsVar);
       }
       break;
-    case cmStateEnums::EXECUTABLE:
+    case cm::TargetType::EXECUTABLE:
       createFlagsVar = target->GetPolicyStatusCMP0210() == cmPolicies::NEW
         ? cmStrCat("CMAKE_EXECUTABLE_CREATE_", linkLanguage, "_FLAGS")
         : cmStrCat("CMAKE_", linkLanguage, "_LINK_FLAGS");
@@ -3482,9 +3517,9 @@ void cmLocalGenerator::AppendLinkerTypeFlags(std::string& flags,
                                              std::string const& linkLanguage)
 {
   switch (target->GetType()) {
-    case cmStateEnums::EXECUTABLE:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::EXECUTABLE:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       break;
     default:
       return;
@@ -3537,13 +3572,13 @@ void cmLocalGenerator::AddTargetTypeLinkerFlags(
 {
   std::string linkerFlagsVar;
   switch (target->GetType()) {
-    case cmStateEnums::EXECUTABLE:
+    case cm::TargetType::EXECUTABLE:
       linkerFlagsVar = "CMAKE_EXE_LINKER_FLAGS";
       break;
-    case cmStateEnums::SHARED_LIBRARY:
+    case cm::TargetType::SHARED_LIBRARY:
       linkerFlagsVar = "CMAKE_SHARED_LINKER_FLAGS";
       break;
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       linkerFlagsVar = "CMAKE_MODULE_LINKER_FLAGS";
       break;
     default:
@@ -3580,9 +3615,9 @@ void cmLocalGenerator::AppendIPOLinkerFlags(std::string& flags,
   }
 
   switch (target->GetType()) {
-    case cmStateEnums::EXECUTABLE:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::EXECUTABLE:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       break;
     default:
       return;
@@ -3605,7 +3640,7 @@ void cmLocalGenerator::AppendPositionIndependentLinkerFlags(
   std::string const& lang)
 {
   // For now, only EXECUTABLE is concerned
-  if (target->GetType() != cmStateEnums::EXECUTABLE) {
+  if (target->GetType() != cm::TargetType::EXECUTABLE) {
     return;
   }
 
@@ -3647,9 +3682,9 @@ void cmLocalGenerator::AppendWarningAsErrorLinkerFlags(
   }
 
   switch (target->GetType()) {
-    case cmStateEnums::EXECUTABLE:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::EXECUTABLE:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       break;
     default:
       return;
@@ -3777,9 +3812,9 @@ bool cmLocalGenerator::AppendLWYUFlags(std::string& flags,
                                        std::string const& lang)
 {
   auto useLWYU = target->GetPropertyAsBool("LINK_WHAT_YOU_USE") &&
-    (target->GetType() == cmStateEnums::TargetType::EXECUTABLE ||
-     target->GetType() == cmStateEnums::TargetType::SHARED_LIBRARY ||
-     target->GetType() == cmStateEnums::TargetType::MODULE_LIBRARY);
+    (target->GetType() == cm::TargetType::EXECUTABLE ||
+     target->GetType() == cm::TargetType::SHARED_LIBRARY ||
+     target->GetType() == cm::TargetType::MODULE_LIBRARY);
 
   if (useLWYU) {
     auto const& lwyuFlag = this->GetMakefile()->GetSafeDefinition(
@@ -4086,7 +4121,7 @@ void cmLocalGenerator::GenerateTargetInstallRules(
   // an install generator and run it.
   auto const& tgts = this->GetGeneratorTargets();
   for (auto const& l : tgts) {
-    if (l->GetType() == cmStateEnums::INTERFACE_LIBRARY) {
+    if (l->GetType() == cm::TargetType::INTERFACE_LIBRARY) {
       continue;
     }
 
@@ -4109,15 +4144,15 @@ void cmLocalGenerator::GenerateTargetInstallRules(
 
       // Generate the proper install generator for this target type.
       switch (l->GetType()) {
-        case cmStateEnums::EXECUTABLE:
-        case cmStateEnums::STATIC_LIBRARY:
-        case cmStateEnums::MODULE_LIBRARY: {
+        case cm::TargetType::EXECUTABLE:
+        case cm::TargetType::STATIC_LIBRARY:
+        case cm::TargetType::MODULE_LIBRARY: {
           // Use a target install generator.
           cmInstallTargetGeneratorLocal g(this, l->GetName(), destination,
                                           false);
           g.Generate(os, config, configurationTypes);
         } break;
-        case cmStateEnums::SHARED_LIBRARY: {
+        case cm::TargetType::SHARED_LIBRARY: {
 #if defined(_WIN32) || defined(__CYGWIN__)
           // Special code to handle DLL.  Install the import library
           // to the normal destination and the DLL to the runtime
@@ -4220,28 +4255,64 @@ std::string cmLocalGenerator::CreateSafeObjectFileName(
   return ssin;
 }
 
-void cmLocalGenerator::ComputeSourceGroupSearchIndex()
+// search a the source group defined for the file set or the source itself
+// in case of match, result is stored in a cache to speed-up future searches
+cmSourceGroup* cmLocalGenerator::FindSourceGroup(
+  cmGeneratorTarget const* target, cmSourceFile const* source,
+  std::string const& config)
 {
 #if !defined(CMAKE_BOOTSTRAP)
-  SourceGroupVector const& sourceGroups = this->Makefile->GetSourceGroups();
+  std::string const SOURCE_GROUP{ "SOURCE_GROUP" };
+  std::string const& targetName = target->GetName();
+  cmGeneratorFileSet const* fileSet =
+    target->GetFileSetForSource(config, source);
 
-  // Build lookup index from sources to source groups
-  std::queue<cmSourceGroup*> sgToVisit;
-  for (auto const& group : sourceGroups) {
-    cmSourceGroup* cmSourceGroup = group.get();
-    sgToVisit.emplace(cmSourceGroup);
+  if (fileSet) {
+    std::string fsName = fileSet->GetName();
+    std::string const fsKey = cmStrCat(targetName, "::", fsName);
+    auto const indexIt = this->SourceGroupSearchIndex.find(fsKey);
+    if (indexIt != this->SourceGroupSearchIndex.cend()) {
+      return indexIt->second;
+    }
+
+    cmValue fsSG = fileSet->GetProperty(SOURCE_GROUP);
+    if (!fsSG.IsEmpty()) {
+      cmSourceGroup* sg = this->GetMakefile()->GetOrCreateSourceGroup(*fsSG);
+      this->SourceGroupSearchIndex.emplace(fsKey, sg);
+      return sg;
+    }
+
+    cmSourceGroup* sourceGroup = cmSourceGroup::FindSourceGroup(
+      targetName, fsName, this->Makefile->GetSourceGroups());
+    if (sourceGroup) {
+      this->SourceGroupSearchIndex.emplace(fsKey, sourceGroup);
+      return sourceGroup;
+    }
   }
 
-  while (!sgToVisit.empty()) {
-    cmSourceGroup* sourceGroup = sgToVisit.front();
-    sgToVisit.pop();
-    for (auto const& sgChild : sourceGroup->GetGroupChildren()) {
-      sgToVisit.emplace(sgChild.get());
-    }
-    for (std::string const& source : sourceGroup->GetGroupFiles()) {
-      this->SourceGroupSearchIndex.emplace(source, sourceGroup);
-    }
+  // no source group defined for the file set or the source is not part of a
+  // file set.
+  // search for source group defined at source level
+  auto const indexIt =
+    this->SourceGroupSearchIndex.find(source->GetFullPath());
+  if (indexIt != this->SourceGroupSearchIndex.cend()) {
+    return indexIt->second;
   }
+
+  cmValue srcSG = source->GetProperty(SOURCE_GROUP);
+  if (!srcSG.IsEmpty()) {
+    cmSourceGroup* sg = this->GetMakefile()->GetOrCreateSourceGroup(*srcSG);
+    this->SourceGroupSearchIndex.emplace(source->GetFullPath(), sg);
+    return sg;
+  }
+
+  // look-up in source groups definitions
+  return this->FindSourceGroup(source->GetFullPath());
+#else
+  static_cast<void>(target);
+  static_cast<void>(source);
+  static_cast<void>(config);
+  return nullptr;
 #endif
 }
 

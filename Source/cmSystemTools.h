@@ -523,9 +523,11 @@ public:
 
   static bool ListTar(std::string const& arFileName,
                       std::vector<std::string> const& files,
+                      std::vector<std::string> const& excludeFiles,
                       std::string const& encoding, bool verbose);
   static bool CreateTar(std::string const& arFileName,
                         std::vector<std::string> const& files,
+                        std::vector<std::string> const& excludeFiles,
                         std::string const& workingDirectory,
                         cmTarCompression compressType,
                         std::string const& encoding, bool verbose,
@@ -534,6 +536,7 @@ public:
                         int compressionLevel = 0, int numThreads = 1);
   static bool ExtractTar(std::string const& arFileName,
                          std::vector<std::string> const& files,
+                         std::vector<std::string> const& excludeFiles,
                          cmTarExtractTimestamps extractTimestamps,
                          std::string const& encoding, bool verbose);
 
@@ -560,6 +563,7 @@ public:
   static std::string const& GetCMakeCursesCommand();
   static std::string const& GetCMClDepsCommand();
   static std::string const& GetCMakeRoot();
+  static bool GetCMakeInBuildTree();
   static std::string const& GetHTMLDoc();
 
   /** Get the CMake config directory **/
@@ -671,6 +675,12 @@ public:
 
   /** Return subview of the full filename (i.e. file name without path) */
   static cm::string_view GetFilenameNameView(cm::string_view filename);
+
+#if defined(_WIN32) || defined(__APPLE__)
+  /** Read the on-disk spelling of the full filename's last component. */
+  static cmsys::Status ReadNameOnDisk(std::string const& path,
+                                      std::string& name);
+#endif
 
   /**
    * Return subview of file extension of a full filename (dot included).

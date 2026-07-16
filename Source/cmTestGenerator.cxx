@@ -5,24 +5,26 @@
 #include <cstddef> // IWYU pragma: keep
 #include <memory>
 #include <ostream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "cmDiagnostics.h"
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorTarget.h"
+#include "cmGlobalGenerator.h"
 #include "cmList.h"
 #include "cmListFileCache.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
 #include "cmPolicies.h"
 #include "cmPropertyMap.h"
 #include "cmRange.h"
 #include "cmScriptGenerator.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmTargetTypes.h"
 #include "cmTest.h"
 #include "cmValue.h"
 
@@ -36,10 +38,9 @@ bool needToQuoteTestName(cmMakefile const& mf, std::string const& name)
     case cmPolicies::WARN:
       // Only warn if a forbidden character is used in the name.
       if (name.find_first_of("$[] #;\t\n\"\\") != std::string::npos) {
-        mf.IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0110),
-                   "\nThe following name given to add_test() is invalid if "
+        mf.IssuePolicyWarning(
+          cmPolicies::CMP0110, {},
+          cmStrCat("The following name given to add_test() is invalid if "
                    "CMP0110 is not set or set to OLD:\n  `",
                    name, "´\n"));
       }
@@ -61,6 +62,27 @@ std::string TestName(cmTest* test)
     name = cmScriptGenerator::Quote(name);
   }
   return name;
+}
+
+// Whether a path is produced by the build (a custom-command output or
+// byproduct) rather than a pre-existing file.  The output-to-source map
+// records every generated path regardless of which target, if any, builds it.
+bool fileIsGenerated(cmGlobalGenerator* gg, std::string const& file)
+{
+  std::string const collapsed = cmSystemTools::CollapseFullPath(file);
+  for (auto const& lg : gg->GetLocalGenerators()) {
+    cmSourcesWithOutput so = lg->GetSourcesWithOutput(collapsed);
+    if (so.Source || so.Target) {
+      return true;
+    }
+    if (file != collapsed) {
+      so = lg->GetSourcesWithOutput(file);
+      if (so.Source || so.Target) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 } // End: anonymous namespace
@@ -90,6 +112,75 @@ bool cmTestGenerator::TestsForConfig(std::string const& config)
 cmTest* cmTestGenerator::GetTest() const
 {
   return this->Test;
+}
+
+bool cmTestGenerator::GetBuildDependencies(cmLocalGenerator* lg,
+                                           BuildDependencies& info)
+{
+  if (this->Test == nullptr ||
+      !cmGeneratorExpression::IsValidTargetName(this->Test->GetName()) ||
+      cmGlobalGenerator::IsReservedTarget(this->Test->GetName())) {
+    return false;
+  }
+
+  std::set<cmGeneratorTarget*> dependencies;
+
+  // Get dependencies from generator expressions
+  cmGeneratorExpression ge(*this->Test->GetMakefile()->GetCMakeInstance(),
+                           this->Test->GetBacktrace());
+  std::string const config;
+  for (std::string const& arg : this->Test->GetCommand()) {
+    auto parsed = ge.Parse(arg);
+    parsed->Evaluate(lg, config);
+    for (cmGeneratorTarget* dep : parsed->GetTargets()) {
+      if (dep && !dep->IsImported()) {
+        dependencies.insert(dep);
+      }
+    }
+  }
+
+  // Add target executed by test
+  if (!this->Test->GetCommand().empty()) {
+    std::string exe = this->Test->GetCommand().front();
+    cmGeneratorTarget* target = lg->FindGeneratorTargetToUse(exe);
+    if (target && target->GetType() == cm::TargetType::EXECUTABLE &&
+        !target->IsImported()) {
+      dependencies.insert(target);
+    }
+  }
+
+  // Add dependencies from BUILD_DEPENDS keyword
+  for (auto const& depName : this->Test->GetDependencies()) {
+    if (depName.empty()) {
+      continue;
+    }
+    cmGeneratorTarget* depTarget = lg->FindGeneratorTargetToUse(depName);
+    if (!depTarget) {
+      cmGlobalGenerator* gg = lg->GetGlobalGenerator();
+      BuildDependencies::FileDependency file;
+      file.Path = depName;
+      file.Owner = gg->FindOutputOwningTarget(depName);
+      file.Generated = fileIsGenerated(gg, depName);
+      info.Files.push_back(std::move(file));
+      continue;
+    }
+    if (depTarget->IsImported()) {
+      lg->GetMakefile()->IssueMessage(
+        MessageType::FATAL_ERROR,
+        cmStrCat("Test \"", this->Test->GetName(), "\" DEPENDS target \"",
+                 depName, "\" which is imported and cannot be built."),
+        this->Test->GetBacktrace());
+      return false;
+    }
+    dependencies.insert(depTarget);
+  }
+
+  for (cmGeneratorTarget* gt : dependencies) {
+    if (gt->IsInBuildSystem()) {
+      info.Targets.push_back(gt);
+    }
+  }
+  return true;
 }
 
 void cmTestGenerator::GenerateScriptActions(std::ostream& os, Indent indent)
@@ -129,7 +220,7 @@ void cmTestGenerator::GenerateCommand(std::ostream& os,
   // be translated.
   std::string exe = argv[0];
   cmGeneratorTarget* target = this->LG->FindGeneratorTargetToUse(exe);
-  if (target && target->GetType() == cmStateEnums::EXECUTABLE) {
+  if (target && target->GetType() == cm::TargetType::EXECUTABLE) {
     // Use the target file on disk.
     exe = target->GetFullPath(config);
 
@@ -148,14 +239,13 @@ void cmTestGenerator::GenerateCommand(std::ostream& os,
           cmList argsWithEmptyValuesPreserved(
             propVal, cmList::ExpandElements::Yes, cmList::EmptyElements::Yes);
           if (launcherWithArgs != argsWithEmptyValuesPreserved) {
-            this->LG->GetMakefile()->IssueDiagnostic(
-              cmDiagnostics::CMD_AUTHOR,
+            this->LG->GetMakefile()->IssuePolicyWarning(
+              cmPolicies::CMP0178,
               cmStrCat("The ", propertyName, " property of target '",
                        target->GetName(),
                        "' contains empty list items. Those empty items are "
                        "being silently discarded to preserve backward "
-                       "compatibility.\n",
-                       cmPolicies::GetPolicyWarning(cmPolicies::CMP0178)));
+                       "compatibility."));
           }
         }
         std::string launcherExe(launcherWithArgs[0]);
@@ -212,6 +302,17 @@ void cmTestGenerator::GenerateScriptForConfig(std::ostream& os,
     os << " " << i.first << " "
        << cmScriptGenerator::Quote(
             ge.Parse(i.second)->Evaluate(this->LG, config));
+  }
+  BuildDependencies deps;
+  if (this->GetBuildDependencies(this->LG, deps)) {
+    cmList depList;
+    for (std::string const& dep :
+         this->LG->GetGlobalGenerator()->GetTestBuildDependencyPaths(config,
+                                                                     deps)) {
+      depList.append(dep);
+    }
+    os << " _CMAKE_TEST_BUILD_DEPENDS "
+       << cmScriptGenerator::Quote(depList.to_string());
   }
   os << ' ';
   this->GenerateBacktrace(os, this->Test->GetBacktrace());

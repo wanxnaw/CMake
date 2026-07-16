@@ -18,6 +18,7 @@
 
 #include "cmDuration.h"
 #include "cmProcessOutput.h"
+#include "cmStdIoTerminal.h"
 
 class cmake;
 class cmCMakePresetsArgs;
@@ -253,6 +254,9 @@ public:
   /** Get the path to the build tree */
   std::string GetBinaryDir();
 
+  /** Get the path to the test stamp file tree */
+  std::string GetStampDir();
+
   /**
    * Get the short path to the file.
    *
@@ -343,18 +347,10 @@ public:
   /** Add log to the output */
   void Log(LogType logType, std::string msg, bool suppress = false);
 
-  /** Color values */
-  enum class Color
-  {
-    CLEAR_COLOR = 0,
-    RED = 31,
-    GREEN = 32,
-    YELLOW = 33,
-    BLUE = 34
-  };
-
-  /** Get color code characters for a specific color */
-  std::string GetColorCode(Color color) const;
+  /** Add log to the output with terminal attributes for console output only.
+   */
+  void Log(LogType logType, std::string msg,
+           cm::StdIo::TermAttrSet const& attrs, bool suppress = false);
 
   /** The Build ID is assigned by CDash */
   void SetBuildID(std::string const& id);
@@ -452,14 +448,14 @@ private:
   /** add a variable definition from a command line -D value */
   bool AddVariableDefinition(std::string const& arg);
 
+  /** apply CTEST_* variable definitions to the CTest configuration map */
+  void ApplyDefinitionsToCTestConfig();
+
   /** set command line arguments read from a test preset */
   bool SetArgsFromPreset(cmCMakePresetsArgs const& args);
 
   /** returns true iff the console supports progress output */
   static bool ProgressOutputSupportedByConsole();
-
-  /** returns true iff the console supports colored output */
-  static bool ColoredOutputSupportedByConsole();
 
   /** Create note from files. */
   int GenerateCTestNotesOutput(cmXMLWriter& xml, cmake* cm,
@@ -489,4 +485,11 @@ private:
     std::ostringstream cmCTestLog_msg;                                        \
     cmCTestLog_msg << msg;                                                    \
     (ctSelf)->Log(cmCTest::logType, cmCTestLog_msg.str(), suppress);          \
+  } while (false)
+
+#define cmCTestColorLog(ctSelf, logType, attrs, msg)                          \
+  do {                                                                        \
+    std::ostringstream cmCTestLog_msg;                                        \
+    cmCTestLog_msg << msg;                                                    \
+    (ctSelf)->Log(cmCTest::logType, cmCTestLog_msg.str(), attrs);             \
   } while (false)

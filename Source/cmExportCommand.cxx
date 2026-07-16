@@ -15,7 +15,9 @@
 
 #include "cmArgumentParser.h"
 #include "cmArgumentParserTypes.h"
+#include "cmBuildSbomGenerator.h"
 #include "cmCryptoHash.h"
+#include "cmDiagnosticContext.h"
 #include "cmDiagnostics.h"
 #include "cmExecutionStatus.h"
 #include "cmExperimental.h"
@@ -23,7 +25,6 @@
 #include "cmExportBuildCMakeConfigGenerator.h"
 #include "cmExportBuildFileGenerator.h"
 #include "cmExportBuildPackageInfoGenerator.h"
-#include "cmExportBuildSbomGenerator.h"
 #include "cmExportSet.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGlobalGenerator.h"
@@ -33,11 +34,11 @@
 #include "cmPolicies.h"
 #include "cmRange.h"
 #include "cmSbomArguments.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSubcommandTable.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 
 #if defined(__HAIKU__)
@@ -86,6 +87,29 @@ static void AddExportGenerator(
     globalGenerator->AddBuildExportExportSet(exportGenerator.get());
   }
   makefile.AddExportBuildFileGenerator(std::move(exportGenerator));
+}
+
+static bool ValidateExportableTarget(std::string const& name, cmMakefile& mf,
+                                     cmGlobalGenerator* gg,
+                                     cmExecutionStatus& status)
+{
+  if (mf.IsAlias(name)) {
+    status.SetError(cmStrCat("given ALIAS target \"", name,
+                             "\" which may not be exported."));
+    return false;
+  }
+  cmTarget const* target = gg->FindTarget(name);
+  if (!target) {
+    status.SetError(cmStrCat("given target \"", name,
+                             "\" which is not built by this project."));
+    return false;
+  }
+  if (target->GetType() == cm::TargetType::UTILITY) {
+    status.SetError(cmStrCat("given custom target \"", name,
+                             "\" which may not be exported."));
+    return false;
+  }
+  return true;
 }
 
 static bool HandleTargetsMode(std::vector<std::string> const& args,
@@ -163,25 +187,7 @@ static bool HandleTargetsMode(std::vector<std::string> const& args,
   cmGlobalGenerator* gg = mf.GetGlobalGenerator();
 
   for (std::string const& currentTarget : *arguments.Targets) {
-    if (mf.IsAlias(currentTarget)) {
-      std::ostringstream e;
-      e << "given ALIAS target \"" << currentTarget
-        << "\" which may not be exported.";
-      status.SetError(e.str());
-      return false;
-    }
-
-    if (cmTarget* target = gg->FindTarget(currentTarget)) {
-      if (target->GetType() == cmStateEnums::UTILITY) {
-        status.SetError("given custom target \"" + currentTarget +
-                        "\" which may not be exported.");
-        return false;
-      }
-    } else {
-      std::ostringstream e;
-      e << "given target \"" << currentTarget
-        << "\" which is not built by this project.";
-      status.SetError(e.str());
+    if (!ValidateExportableTarget(currentTarget, mf, gg, status)) {
       return false;
     }
     targets.emplace_back(currentTarget, std::string{});
@@ -199,11 +205,9 @@ static bool HandleTargetsMode(std::vector<std::string> const& args,
   if (gg->GetExportedTargetsFile(fname)) {
     switch (mf.GetPolicyStatus(cmPolicies::CMP0103)) {
       case cmPolicies::WARN:
-        mf.IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0103),
-                   "\n"
-                   "export() command already specified for the file\n  ",
+        mf.IssuePolicyWarning(
+          cmPolicies::CMP0103, {},
+          cmStrCat("export() command already specified for the file\n  ",
                    arguments.Filename, "\nDid you miss 'APPEND' keyword?"));
         CM_FALLTHROUGH;
       case cmPolicies::OLD:
@@ -216,14 +220,17 @@ static bool HandleTargetsMode(std::vector<std::string> const& args,
     }
   }
 
+  cmDiagnosticContext context = cmExportBuildFileGenerator::CaptureContext(mf);
   std::unique_ptr<cmExportBuildFileGenerator> ebfg = nullptr;
   if (android) {
-    auto ebag = cm::make_unique<cmExportBuildAndroidMKGenerator>();
+    auto ebag =
+      cm::make_unique<cmExportBuildAndroidMKGenerator>(std::move(context));
     ebag->SetNamespace(arguments.Namespace);
     ebag->SetAppendMode(arguments.Append);
     ebfg = std::move(ebag);
   } else {
-    auto ebcg = cm::make_unique<cmExportBuildCMakeConfigGenerator>();
+    auto ebcg =
+      cm::make_unique<cmExportBuildCMakeConfigGenerator>(std::move(context));
     ebcg->SetNamespace(arguments.Namespace);
     ebcg->SetAppendMode(arguments.Append);
     ebcg->SetExportOld(arguments.ExportOld);
@@ -286,9 +293,7 @@ static bool HandleExportMode(std::vector<std::string> const& args,
     if (p == cmPolicies::WARN) {
       status.GetMakefile().IssueDiagnostic(
         cmDiagnostics::CMD_AUTHOR, cmStrCat("export "_s, status.GetError()));
-      status.GetMakefile().IssueDiagnostic(
-        cmDiagnostics::CMD_AUTHOR,
-        cmPolicies::GetPolicyWarning(cmPolicies::CMP0208));
+      status.GetMakefile().IssuePolicyWarning(cmPolicies::CMP0208);
     }
   }
 
@@ -327,7 +332,8 @@ static bool HandleExportMode(std::vector<std::string> const& args,
   }
 
   // Set up export file generation.
-  auto ebcg = cm::make_unique<cmExportBuildCMakeConfigGenerator>();
+  auto ebcg = cm::make_unique<cmExportBuildCMakeConfigGenerator>(
+    cmExportBuildFileGenerator::CaptureContext(mf));
   ebcg->SetNamespace(arguments.Namespace);
   ebcg->SetExportPackageDependencies(arguments.ExportPackageDependencies);
 
@@ -376,7 +382,8 @@ static bool HandleSpecialExportMode(std::vector<std::string> const& args,
   cmMakefile& mf = status.GetMakefile();
   cmGlobalGenerator* gg = mf.GetGlobalGenerator();
 
-  std::string const& dir = mf.GetCurrentBinaryDirectory();
+  std::string const& dir =
+    arguments.GetDefaultDestination(mf.GetCurrentBinaryDirectory());
   std::string const fname = cmStrCat(dir, '/', arguments.GetPackageFileName());
 
   if (gg->GetExportedTargetsFile(fname)) {
@@ -393,7 +400,8 @@ static bool HandleSpecialExportMode(std::vector<std::string> const& args,
   }
 
   // Create the export build generator
-  auto ebpg = cm::make_unique<GeneratorType>(arguments);
+  auto ebpg = cm::make_unique<GeneratorType>(
+    arguments, cmExportBuildFileGenerator::CaptureContext(mf));
   AddExportGenerator(mf, gg, std::move(ebpg), fname, *exportSet,
                      arguments.CxxModulesDirectory);
   return true;
@@ -416,10 +424,65 @@ static bool HandleSbomMode(std::vector<std::string> const& args,
     return false;
   }
 
-  using arg_t = cmSbomArguments;
-  using gen_t = cmExportBuildSbomGenerator;
-  status.GetMakefile().SetExplicitlyGeneratesSbom(true);
-  return HandleSpecialExportMode<arg_t, gen_t>(args, status);
+  struct SbomExportArguments
+    : public cmSbomArguments
+    , public ArgumentParser::ParseResult
+  {
+    ArgumentParser::NonEmpty<std::vector<std::string>> ExportSetNames;
+
+    using cmSbomArguments::Check;
+    using ArgumentParser::ParseResult::Check;
+  };
+
+  auto parser = cmArgumentParser<SbomExportArguments>{};
+  cmSbomArguments::Bind(parser);
+  parser.Bind("EXPORTS"_s, &SbomExportArguments::ExportSetNames);
+
+  std::vector<std::string> unknownArgs;
+  SbomExportArguments arguments = parser.Parse(args, &unknownArgs);
+
+  if (!arguments.Check(args[0], &unknownArgs, status)) {
+    return false;
+  }
+
+  if (arguments.ExportSetNames.empty()) {
+    status.SetError(cmStrCat(args[0], " missing EXPORTS."));
+    return false;
+  }
+
+  if (!arguments.Check(status) || !arguments.SetMetadataFromProject(status)) {
+    return false;
+  }
+
+  cmMakefile& mf = status.GetMakefile();
+  cmGlobalGenerator* gg = mf.GetGlobalGenerator();
+
+  std::string const dir =
+    arguments.GetDefaultDestination(mf.GetCurrentBinaryDirectory());
+  std::string const fpath = cmStrCat(dir, '/', arguments.GetPackageName());
+
+  if (gg->IsBuildSbomFile(fpath)) {
+    status.SetError(cmStrCat("SBOM command already specified for the file "_s,
+                             cmSystemTools::GetFilenameNameView(fpath), '.'));
+    return false;
+  }
+
+  std::vector<cmExportSet*> sets;
+  sets.reserve(arguments.ExportSetNames.size());
+  for (std::string const& name : arguments.ExportSetNames) {
+    cm::optional<cmExportSet*> const exportSet =
+      GetExportSet(name, gg, status);
+    if (!exportSet) {
+      return false;
+    }
+    sets.push_back(*exportSet);
+  }
+
+  auto builder = cm::make_unique<cmBuildSbomGenerator>(arguments, sets, fpath);
+  cmBuildSbomGenerator* rawPtr = builder.get();
+  mf.AddBuildSbomGenerator(std::move(builder));
+  gg->AddBuildSbomGenerator(rawPtr);
+  return true;
 }
 
 static bool HandleSetupMode(std::vector<std::string> const& args,

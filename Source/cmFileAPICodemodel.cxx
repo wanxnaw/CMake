@@ -60,6 +60,7 @@
 #include "cmTarget.h"
 #include "cmTargetDepend.h"
 #include "cmTargetExport.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 #include "cmake.h"
 
@@ -462,9 +463,13 @@ class Target
   std::unordered_map<CompileData, Json::ArrayIndex> CompileGroupMap;
   std::vector<CompileGroup> CompileGroups;
 
-  using FileSetDatabase = std::map<std::string, Json::ArrayIndex>;
+  using FileSetDatabase = std::map<std::string, std::vector<Json::ArrayIndex>>;
+
+  using FileSetBacktraceDatabase =
+    std::unordered_map<std::string, std::vector<cmListFileBacktrace>>;
 
   std::vector<cm::FileSetMetadata::Visibility> FileSetVisibilities;
+  FileSetBacktraceDatabase FileSetBacktraces;
 
   template <typename T>
   JBT<T> ToJBT(BT<T> const& bt)
@@ -723,7 +728,7 @@ CodemodelConfig::DumpedTargets CodemodelConfig::DumpTargets()
             });
 
   for (cmGeneratorTarget* gt : targetList) {
-    if (gt->GetType() == cmStateEnums::GLOBAL_TARGET) {
+    if (gt->GetType() == cm::TargetType::GLOBAL_TARGET) {
       continue;
     }
 
@@ -1261,7 +1266,7 @@ Json::Value Target::Dump()
 {
   Json::Value target = Json::objectValue;
 
-  cmStateEnums::TargetType const type = this->GT->GetType();
+  cm::TargetType const type = this->GT->GetType();
 
   target["codemodelVersion"] =
     cmFileAPI::BuildVersion(this->VersionMajor, this->VersionMinor);
@@ -1298,21 +1303,21 @@ Json::Value Target::Dump()
     }
   }
 
-  if (type == cmStateEnums::EXECUTABLE ||
-      type == cmStateEnums::SHARED_LIBRARY ||
-      type == cmStateEnums::MODULE_LIBRARY) {
+  if (type == cm::TargetType::EXECUTABLE ||
+      type == cm::TargetType::SHARED_LIBRARY ||
+      type == cm::TargetType::MODULE_LIBRARY) {
     target["nameOnDisk"] = this->GT->GetFullName(this->Config);
     if (!this->GT->IsImported()) {
       target["link"] = this->DumpLink();
     }
-  } else if (type == cmStateEnums::STATIC_LIBRARY) {
+  } else if (type == cm::TargetType::STATIC_LIBRARY) {
     target["nameOnDisk"] = this->GT->GetFullName(this->Config);
     if (!this->GT->IsImported()) {
       target["archive"] = this->DumpArchive();
     }
   }
 
-  if (type == cmStateEnums::EXECUTABLE) {
+  if (type == cm::TargetType::EXECUTABLE) {
     Json::Value launchers = this->DumpLaunchers();
     if (!launchers.empty()) {
       target["launchers"] = std::move(launchers);
@@ -1541,7 +1546,9 @@ CompileData Target::BuildCompileData(cmSourceFile* sf)
     }
   }
 
-  if (!pchSources.empty() && !sf->GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        sf->GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     std::string pchOptions;
     auto pchIt = pchSources.find(sf->ResolveFullPath());
     if (pchIt != pchSources.end()) {
@@ -1776,6 +1783,7 @@ std::pair<Json::Value, Target::FileSetDatabase> Target::DumpFileSets()
   // interface sources, which needs to map files to file set visibility
   // with only an index available. Those indexes match this vector.
   this->FileSetVisibilities.clear();
+  this->FileSetBacktraces.clear();
 
   // Build the fileset database.
   auto const& fileSets = this->GT->GetAllFileSets();
@@ -1802,7 +1810,35 @@ std::pair<Json::Value, Target::FileSetDatabase> Target::DumpFileSets()
           } else {
             sf_path = cmStrCat(dir, '/', file);
           }
-          fsdb[sf_path] = static_cast<Json::ArrayIndex>(fsIndex);
+          fsdb[sf_path].emplace_back(static_cast<Json::ArrayIndex>(fsIndex));
+        }
+      }
+
+      // Collect backtraces from each original file set FILES entry so that
+      // source backtraces preserve line metadata and can include repeated
+      // additions from multiple file sets.
+      auto const& fileEntries = fs->GetFileEntries();
+      for (BT<std::string> const& fileEntry : fileEntries) {
+        cmGeneratorExpression ge(
+          *this->GT->GetLocalGenerator()->GetCMakeInstance(),
+          fileEntry.Backtrace);
+        for (std::string const& ex : cmList{ fileEntry.Value }) {
+          std::unique_ptr<cmCompiledGeneratorExpression> cge = ge.Parse(ex);
+          std::map<std::string, std::vector<std::string>> filesForEntry;
+          fs->EvaluateFileEntry(directories.first, filesForEntry, cge, context,
+                                this->GT);
+          for (auto const& filesPerDir : filesForEntry) {
+            std::string const& dir = filesPerDir.first;
+            for (std::string const& file : filesPerDir.second) {
+              std::string sf_path;
+              if (dir.empty() || cmSystemTools::FileIsFullPath(file)) {
+                sf_path = file;
+              } else {
+                sf_path = cmStrCat(dir, '/', file);
+              }
+              this->FileSetBacktraces[sf_path].push_back(fileEntry.Backtrace);
+            }
+          }
         }
       }
 
@@ -1855,15 +1891,44 @@ Json::Value Target::DumpSource(cmGeneratorTarget::SourceAndKind const& sk,
   if (sk.Source.Value->GetIsGenerated()) {
     source["isGenerated"] = true;
   }
-  this->AddBacktrace(source, sk.Source.Backtrace);
+
+  JBTIndex sourceBacktrace = this->Backtraces.Add(sk.Source.Backtrace);
+  JBTIndex primaryBacktrace = sourceBacktrace;
+  Json::Value backtraces = Json::arrayValue;
+  auto const fileSetBacktraces = this->FileSetBacktraces.find(path);
+  if (fileSetBacktraces != this->FileSetBacktraces.end() &&
+      !fileSetBacktraces->second.empty()) {
+    for (cmListFileBacktrace const& fsbt : fileSetBacktraces->second) {
+      if (JBTIndex bt = this->Backtraces.Add(fsbt)) {
+        if (!primaryBacktrace) {
+          primaryBacktrace = bt;
+        }
+        backtraces.append(bt.Index);
+      }
+    }
+  } else {
+    if (sourceBacktrace) {
+      backtraces.append(sourceBacktrace.Index);
+    }
+  }
+
+  this->AddBacktrace(source, primaryBacktrace);
+
+  if (!backtraces.empty()) {
+    source["backtraces"] = std::move(backtraces);
+  }
 
   auto fsit = fsdb.find(path);
   if (fsit != fsdb.end()) {
-    source["fileSetIndex"] = fsit->second;
+    source["fileSetIndex"] = fsit->second.back();
+    source["fileSetIndexes"] = Json::arrayValue;
+    for (Json::ArrayIndex const& fsIndex : fsit->second) {
+      source["fileSetIndexes"].append(fsIndex);
+    }
   }
 
-  if (cmSourceGroup const* sg =
-        this->GT->LocalGenerator->FindSourceGroup(path)) {
+  if (cmSourceGroup const* sg = this->GT->LocalGenerator->FindSourceGroup(
+        this->GT, sf, this->Config)) {
     Json::ArrayIndex const groupIndex = this->AddSourceGroup(sg);
     source["sourceGroupIndex"] = groupIndex;
     this->SourceGroups[groupIndex].SourceIndexes.append(si);
@@ -1920,7 +1985,7 @@ Json::Value Target::DumpInterfaceSources(FileSetDatabase const& fsdb)
   }
 
   for (auto const& fsIter : fsdb) {
-    Json::ArrayIndex const index = fsIter.second;
+    Json::ArrayIndex const index = fsIter.second.back();
     // FileSetVisibilities was populated by DumpFileSets() and will always
     // have the same size as the file sets array that index is indexing into
     if (this->FileSetVisibilities[index] !=
@@ -1946,11 +2011,15 @@ Json::Value Target::DumpInterfaceSource(std::string path, Json::ArrayIndex si,
 
   auto fsit = fsdb.find(path);
   if (fsit != fsdb.end()) {
-    source["fileSetIndex"] = fsit->second;
+    source["fileSetIndex"] = fsit->second.back();
+    source["fileSetIndexes"] = Json::arrayValue;
+    for (Json::ArrayIndex const& fsIndex : fsit->second) {
+      source["fileSetIndexes"].append(fsIndex);
+    }
   }
 
-  if (cmSourceGroup const* sg =
-        this->GT->LocalGenerator->FindSourceGroup(path)) {
+  if (cmSourceGroup const* sg = this->GT->LocalGenerator->FindSourceGroup(
+        this->GT, sf, this->Config)) {
     Json::ArrayIndex const groupIndex = this->AddSourceGroup(sg);
     source["sourceGroupIndex"] = groupIndex;
     this->SourceGroups[groupIndex].InterfaceSourceIndexes.append(si);
@@ -2140,7 +2209,7 @@ Json::Value Target::DumpArtifacts()
   Json::Value artifacts = Json::arrayValue;
 
   // Object libraries have only object files as artifacts.
-  if (this->GT->GetType() == cmStateEnums::OBJECT_LIBRARY) {
+  if (this->GT->GetType() == cm::TargetType::OBJECT_LIBRARY) {
     if (!this->GT->Target->HasKnownObjectFileLocation(nullptr)) {
       return artifacts;
     }
@@ -2197,7 +2266,7 @@ Json::Value Target::DumpArtifacts()
     }
   }
   if (this->GT->IsDLLPlatform() &&
-      this->GT->GetType() != cmStateEnums::STATIC_LIBRARY) {
+      this->GT->GetType() != cm::TargetType::STATIC_LIBRARY) {
     cmGeneratorTarget::OutputInfo const* output =
       this->GT->GetOutputInfo(this->Config);
     if (output && !output->PdbDir.empty()) {

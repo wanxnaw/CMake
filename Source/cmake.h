@@ -19,6 +19,7 @@
 #include <cmext/string_view>
 
 #include "cmBuildArgs.h"
+#include "cmDiagnosticContext.h"
 #include "cmDiagnostics.h"
 #include "cmDocumentationEntry.h" // IWYU pragma: keep
 #include "cmGeneratedFileStream.h"
@@ -605,15 +606,19 @@ public:
   void IssueMessage(
     MessageType t, std::string const& text,
     cmListFileBacktrace const& backtrace = cmListFileBacktrace()) const;
-  void IssueDiagnostic(
-    cmDiagnosticCategory category, std::string const& text,
-    cmStateSnapshot const& state,
-    cmListFileBacktrace const& backtrace = cmListFileBacktrace()) const;
-  void IssueDiagnostic(
-    cmDiagnosticCategory category, std::string const& text,
-    cmListFileBacktrace const& backtrace = cmListFileBacktrace()) const
+  void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
+                       cmStateSnapshot const& state,
+                       cmDiagnosticContext const& context = {}) const;
+  void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
+                       cmDiagnosticContext const& context = {}) const
   {
-    this->IssueDiagnostic(category, text, this->CurrentSnapshot, backtrace);
+    this->IssueDiagnostic(category, text, this->CurrentSnapshot, context);
+  }
+  void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
+                       cmListFileBacktrace backtrace) const
+  {
+    this->IssueDiagnostic(category, text, this->CurrentSnapshot,
+                          cmDiagnosticContext{ std::move(backtrace) });
   }
 
   //! run the --build option
@@ -705,7 +710,8 @@ public:
 
 protected:
   void RunCheckForUnusedVariables();
-  int HandleDeleteCacheVariables(std::string const& var);
+  int HandleDeleteCacheVariables(
+    std::map<std::string, std::string> const& var);
 
   using RegisteredGeneratorsVector =
     std::vector<std::unique_ptr<cmGlobalGeneratorFactory>>;
@@ -800,6 +806,8 @@ private:
     UnprocessedPresetVariables;
   std::map<std::string, cm::optional<std::string>>
     UnprocessedPresetEnvironment;
+  std::map<std::string, cm::optional<cmCMakePresetsGraph::CacheVariable>>
+    InitialPresetVariables;
 #endif
 
 #if !defined(CMAKE_BOOTSTRAP)

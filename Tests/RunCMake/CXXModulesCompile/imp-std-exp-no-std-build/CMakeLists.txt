@@ -1,5 +1,5 @@
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD
-  "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+  "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
 
 cmake_minimum_required(VERSION 3.29)
 project(cxx_modules_import_std_export_no_std CXX)
@@ -53,7 +53,7 @@ add_test(NAME import_std_export_no_std_build
   COMMAND
     "${CMAKE_COMMAND}"
     "-Dexpected_dir=${CMAKE_CURRENT_SOURCE_DIR}"
-    "-Dimport_std_export_no_std_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    "-DCMAKE_PREFIX_PATH=${CMAKE_CURRENT_BINARY_DIR}"
     ${generator}
     -S "${CMAKE_CURRENT_SOURCE_DIR}/test"
     -B "${CMAKE_CURRENT_BINARY_DIR}/test")

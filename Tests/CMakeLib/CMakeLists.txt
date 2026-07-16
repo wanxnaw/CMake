@@ -4,6 +4,7 @@ configure_file(testConfig.h.in testConfig.h @ONLY)
 set(CMakeLib_TESTS
   testAssert.cxx
   testArgumentParser.cxx
+  testCacheDocumentationTable.cxx
   testCTestBinPacker.cxx
   testCTestResourceAllocator.cxx
   testCTestResourceSpec.cxx
@@ -13,6 +14,10 @@ set(CMakeLib_TESTS
   testDocumentationFormatter.cxx
   testGccDepfileReader.cxx
   testGeneratedFileStream.cxx
+  testGenExBoundOperand.cxx
+  testGenExTransformApply.cxx
+  testGenExListPredicate.cxx
+  testGenExListSortComparator.cxx
   testJSONHelpers.cxx
   testRST.cxx
   testRange.cxx

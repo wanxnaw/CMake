@@ -3,6 +3,10 @@ include(RunCMake)
 run_cmake(NotEnabledLanguage)
 run_cmake(NonExistentLanguage)
 run_cmake(UnknownArgument)
+run_cmake(MultipleLanguages)
+
+run_cmake(RequiredFlags)
+run_cmake(Issue27893)
 
 run_cmake(CheckCSourceCompiles)
 run_cmake(CheckCXXSourceCompiles)

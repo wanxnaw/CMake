@@ -72,6 +72,17 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     endforeach()
   endif()
 
+  # Check if there is any vendor specific LLVMFlang
+  if(lang STREQUAL "Fortran" AND CMAKE_${lang}_COMPILER_ID STREQUAL "LLVMFlang")
+    set(_orig_compiler_id "${CMAKE_${lang}_COMPILER_ID}")
+    foreach(userflags "${CMAKE_${lang}_COMPILER_ID_FLAGS_LIST}" "")
+      CMAKE_DETERMINE_COMPILER_ID_VENDOR(${lang} "${userflags}")
+      if(NOT CMAKE_${lang}_COMPILER_ID STREQUAL _orig_compiler_id)
+        break()
+      endif()
+    endforeach()
+  endif()
+
   # Check if compiler id detection gave us the compiler tool.
   if(CMAKE_${lang}_COMPILER_ID_TOOL)
     set(CMAKE_${lang}_COMPILER "${CMAKE_${lang}_COMPILER_ID_TOOL}")
@@ -237,6 +248,22 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     endif()
   endif()
 
+  # The IBM LLVM Flang compiler version is extracted from --version output
+  if(CMAKE_${lang}_COMPILER_ID STREQUAL "IBMFlang")
+    execute_process(
+      COMMAND "${CMAKE_${lang}_COMPILER}" --version
+      OUTPUT_VARIABLE output
+      ERROR_VARIABLE output
+      RESULT_VARIABLE result
+      TIMEOUT 10
+    )
+    if(result EQUAL 0)
+      if(output MATCHES [[version ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)]])
+        set(CMAKE_${lang}_COMPILER_VERSION "${CMAKE_MATCH_1}")
+      endif()
+    endif()
+  endif()
+
   # if the format is unknown after all files have been checked, put "Unknown" in the cache
   if(NOT CMAKE_EXECUTABLE_FORMAT)
     set(CMAKE_EXECUTABLE_FORMAT "Unknown" CACHE INTERNAL "Executable file format")
@@ -368,13 +395,29 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
   set(CMAKE_${lang}_STANDARD_LIBRARY "")
   if ("x${lang}" STREQUAL "xCXX" AND
       EXISTS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/${lang}-DetectStdlib.h" AND
-      ("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xClang" AND
-       "x${CMAKE_${lang}_COMPILER_FRONTEND_VARIANT}" STREQUAL "xGNU") OR
+      ("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xClang") OR
       ("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xGNU"))
     # See #20851 for a proper abstraction for this.
+
+    # Forward configured stdlib include dirs so this probe can find <version>
+    # in non-default toolchain layouts (e.g. clang-cl with MSVC STL).
+    set(_inc_dirs)
+    set(_inc_opt "")
+    if (CMAKE_${lang}_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+      set(_inc_opt -isystem)
+    elseif (CMAKE_${lang}_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+      set(_inc_opt -imsvc)
+    endif ()
+    if (_inc_opt)
+      foreach(_inc_path IN LISTS CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES)
+        list(APPEND _inc_dirs "${_inc_opt}" "${_inc_path}")
+      endforeach()
+    endif ()
+
     execute_process(
       COMMAND "${CMAKE_${lang}_COMPILER}"
         ${CMAKE_${lang}_COMPILER_ID_ARG1}
+        ${_inc_dirs}
         ${CMAKE_CXX_COMPILER_ID_FLAGS_LIST}
         -E
         -x c++-header

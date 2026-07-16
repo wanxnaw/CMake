@@ -117,6 +117,52 @@ add_test(fails \"${CMAKE_COMMAND}\" -E false)
   run_cmake_command(rerun-failed ${CMAKE_CTEST_COMMAND} --rerun-failed)
 endblock()
 
+block()
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/out-of-date)
+  set(RunCMake_TEST_NO_CLEAN 1)
+  file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
+  set(out_of_date_build_dir "${RunCMake_TEST_BINARY_DIR}/build")
+  set(out_of_date_config "Debug")
+  if(NOT RunCMake_GENERATOR_IS_MULTI_CONFIG)
+    set(out_of_date_config "")
+  endif()
+  set(out_of_date_build_config_args)
+  set(out_of_date_ctest_config_args)
+  if(out_of_date_config)
+    set(out_of_date_build_config_args --config ${out_of_date_config})
+    set(out_of_date_ctest_config_args -C ${out_of_date_config})
+  endif()
+  file(COPY "${RunCMake_SOURCE_DIR}/out-of-date-src"
+       DESTINATION "${RunCMake_TEST_BINARY_DIR}")
+  set(RunCMake_TEST_SOURCE_DIR "${RunCMake_TEST_BINARY_DIR}/out-of-date-src")
+  set(RunCMake_TEST_BINARY_DIR "${out_of_date_build_dir}")
+  run_cmake(out-of-date-configure)
+  run_cmake_command(out-of-date-build "${CMAKE_COMMAND}" --build "${out_of_date_build_dir}" ${out_of_date_build_config_args})
+  run_cmake_command(out-of-date-initial-test
+    "${CMAKE_CTEST_COMMAND}" ${out_of_date_ctest_config_args} -V --test-dir "${out_of_date_build_dir}")
+
+  # Sleep for timestamp compare
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1.125)
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -P
+    "${RunCMake_TEST_SOURCE_DIR}/update-deps.cmake"
+    COMMAND_ERROR_IS_FATAL ANY)
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E touch
+    "${RunCMake_TEST_BINARY_DIR}/file_gen"
+    COMMAND_ERROR_IS_FATAL ANY)
+  run_cmake_command(out-of-date-rebuild
+    "${CMAKE_COMMAND}" --build "${out_of_date_build_dir}" ${out_of_date_build_config_args})
+  set(RunCMake_TEST_COMMAND_WORKING_DIRECTORY "${out_of_date_build_dir}")
+
+  # Sleep for timestamp compare
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1.125)
+
+  run_cmake_command(out-of-date ${CMAKE_CTEST_COMMAND} ${out_of_date_ctest_config_args} -V --out-of-date)
+  run_cmake_command(up-to-date ${CMAKE_CTEST_COMMAND} ${out_of_date_ctest_config_args} -V --out-of-date)
+  unset(RunCMake_TEST_COMMAND_WORKING_DIRECTORY)
+endblock()
+
 function(run_BadCTestTestfile)
   set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/BadCTestTestfile)
   set(RunCMake_TEST_NO_CLEAN 1)
@@ -656,6 +702,193 @@ endfunction()
 run_testDir(testDir 0)
 run_testDir(testDir-preset 1)
 
+# Test --source-dir and --build-dir
+run_cmake_command(source-dir-invalid-arg ${CMAKE_CTEST_COMMAND} --source-dir)
+run_cmake_command(build-dir-invalid-arg ${CMAKE_CTEST_COMMAND} --build-dir)
+
+# Build the -D arguments needed to pass the generator to ctest -T Configure.
+macro(ctest_source_dir_generator_args var)
+  set(${var} -D "CTEST_CMAKE_GENERATOR=${RunCMake_GENERATOR}")
+  if(RunCMake_GENERATOR_PLATFORM)
+    list(APPEND ${var}
+      -D "CTEST_CMAKE_GENERATOR_PLATFORM=${RunCMake_GENERATOR_PLATFORM}")
+  endif()
+endmacro()
+
+# Verify that ctest -T Configure works with an empty binary directory
+# when --source-dir is provided.
+function(run_configure_empty_bindir)
+  set(src "${RunCMake_BINARY_DIR}/configure-empty-bindir-src")
+  set(bin "${RunCMake_BINARY_DIR}/configure-empty-bindir-bin")
+  file(REMOVE_RECURSE "${src}" "${bin}")
+  file(MAKE_DIRECTORY "${src}")
+  file(WRITE "${src}/CMakeLists.txt"
+    "cmake_minimum_required(VERSION 3.10)\nproject(Minimal LANGUAGES NONE)\n")
+  # Note that run_cmake_command always pre-creates RunCMake_TEST_BINARY_DIR
+  # before invoking the command, so this test exercises configure from an already-
+  # created but otherwise empty binary directory.  The MakeDirectory call in CTest
+  # itself is what would handle the truly-absent case in production use.
+  set(RunCMake_TEST_BINARY_DIR "${bin}")
+  set(RunCMake_TEST_NO_CLEAN 1)
+  ctest_source_dir_generator_args(generator_args)
+  run_cmake_command(configure-empty-bindir
+    ${CMAKE_CTEST_COMMAND}
+    --source-dir "${src}"
+    --build-dir  "${bin}"
+    ${generator_args}
+    -T Configure)
+endfunction()
+run_configure_empty_bindir()
+
+# Verify expected error condition when --source-dir does not contain
+# a CMakeLists.txt file.
+function(run_configure_no_cmakelists)
+  set(src "${RunCMake_BINARY_DIR}/configure-no-cmakelists-src")
+  set(bin "${RunCMake_BINARY_DIR}/configure-no-cmakelists-bin")
+  file(REMOVE_RECURSE "${src}" "${bin}")
+  # Source dir exists but contains no CMakeLists.txt
+  file(MAKE_DIRECTORY "${src}")
+  set(RunCMake_TEST_BINARY_DIR "${bin}")
+  set(RunCMake_TEST_NO_CLEAN 1)
+  ctest_source_dir_generator_args(generator_args)
+  run_cmake_command(configure-no-cmakelists
+    ${CMAKE_CTEST_COMMAND}
+    --source-dir "${src}"
+    --build-dir  "${bin}"
+    ${generator_args}
+    -T Configure)
+endfunction()
+run_configure_no_cmakelists()
+
+# Helper for tests that invoke ctest -M/-T Configure with -D CTEST_PRESET.
+# Options:
+#   SOURCE_DIR  -- pass --source-dir to ctest
+#   BUILD_DIR   -- create a separate <CASE_NAME>-build dir with
+#                  DartConfiguration.tcl and pass --build-dir to ctest
+#   DART_VARS   -- seed DartConfiguration.tcl with BuildName/Site originals
+#                  and pass -D CTEST_BUILD_NAME/CTEST_SITE overrides to ctest
+function(run_ctest_configure_cli_preset CASE_NAME)
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "SOURCE_DIR;BUILD_DIR;BAD_PRESETS;DART_VARS" "PRESET_NAME" "")
+  set(src "${RunCMake_BINARY_DIR}/${CASE_NAME}")
+  set(bin "${src}")
+  if(ARG_BUILD_DIR)
+    set(bin "${RunCMake_BINARY_DIR}/${CASE_NAME}-build")
+  endif()
+  set(preset_name "my-preset")
+  if(ARG_PRESET_NAME)
+    set(preset_name "${ARG_PRESET_NAME}")
+  endif()
+  configure_file("${RunCMake_SOURCE_DIR}/CMakeLists.txt.in"
+                 "${src}/CMakeLists.txt" @ONLY)
+  if(ARG_BAD_PRESETS)
+    configure_file("${RunCMake_SOURCE_DIR}/BadCMakePresets.json.in"
+                   "${src}/CMakePresets.json" @ONLY)
+  else()
+    configure_file("${RunCMake_SOURCE_DIR}/CMakePresets.json.in"
+                   "${src}/CMakePresets.json" @ONLY)
+  endif()
+  file(REMOVE_RECURSE "${src}/build")
+  if(ARG_BUILD_DIR)
+    file(REMOVE_RECURSE "${bin}")
+    file(MAKE_DIRECTORY "${bin}")
+    set(dart_extra "")
+    if(ARG_DART_VARS)
+      set(dart_extra "BuildName: original-build-name\nSite: original-site\n")
+    endif()
+    file(WRITE "${bin}/DartConfiguration.tcl"
+      "BuildDirectory: ${bin}\n"
+      "SourceDirectory: ${src}\n"
+      "${dart_extra}"
+      "ConfigureCommand: \"${CMAKE_COMMAND}\" -S\"${src}\" -B\"${bin}\"\n")
+  endif()
+  set(extra_args "")
+  if(ARG_SOURCE_DIR)
+    list(APPEND extra_args --source-dir "${src}")
+  endif()
+  if(ARG_BUILD_DIR)
+    list(APPEND extra_args --build-dir "${bin}")
+  endif()
+  if(ARG_DART_VARS)
+    list(APPEND extra_args
+      -D "CTEST_BUILD_NAME=cli-build-name"
+      -D "CTEST_SITE=cli-site")
+  endif()
+  set(RunCMake_TEST_SOURCE_DIR "${src}")
+  set(RunCMake_TEST_SOURCE_DIR "${src}")
+  set(RunCMake_TEST_BINARY_DIR "${bin}")
+  set(RunCMake_TEST_NO_CLEAN 1)
+  run_cmake_command(${CASE_NAME}
+    ${CMAKE_CTEST_COMMAND}
+    ${extra_args}
+    -M Experimental
+    -D "CTEST_PRESET=${preset_name}"
+    -T Configure
+    -V)
+endfunction()
+
+# CTEST_PRESET via -D reaches ctest_configure() when run with -M/-T.
+run_ctest_configure_cli_preset(ConfigurePresetCLIVar BUILD_DIR)
+
+# --source-dir + -D CTEST_PRESET picks up the preset's binaryDir when no
+# DartConfiguration.tcl / explicit --build-dir is provided.
+run_ctest_configure_cli_preset(ConfigurePresetCLIVarSourceDir SOURCE_DIR)
+
+# An explicit --build-dir takes precedence over the preset's binaryDir.
+run_ctest_configure_cli_preset(ConfigurePresetCLIVarBuildDirOverride SOURCE_DIR BUILD_DIR)
+
+# A malformed presets file is an error.
+run_ctest_configure_cli_preset(ConfigurePresetCLIVarBadPresets SOURCE_DIR BAD_PRESETS)
+
+# Referencing a preset that does not exist is an error.
+run_ctest_configure_cli_preset(ConfigurePresetCLIVarUnknownPreset SOURCE_DIR
+  PRESET_NAME nonexistent-preset)
+
+# -D CTEST_BUILD_NAME and -D CTEST_SITE are recorded in DartConfiguration.tcl,
+# overriding pre-existing values (pre-existing binary dir).
+run_ctest_configure_cli_preset(ConfigureCLIVarDartPersist BUILD_DIR DART_VARS)
+
+# -D CTEST_BUILD_NAME and -D CTEST_SITE are recorded in DartConfiguration.tcl
+# when cmake creates it fresh (empty binary dir via --source-dir).
+run_ctest_configure_cli_preset(ConfigureCLIVarDartPersistSourceDir SOURCE_DIR DART_VARS)
+
+# The following end-to-end test demonstrates that:
+# 1) ctest -T Configure writes user-specified Site and BuildName in
+#    preset.binaryDir/DartConfiguration.tcl.
+# 2) ctest -T Update correctly loads this data.
+block()
+  set(src "${RunCMake_BINARY_DIR}/ReuseBuildNameFromPresetBinaryDir")
+  set(bin "${src}/build")
+  configure_file("${RunCMake_SOURCE_DIR}/CMakeLists.txt.in"
+                 "${src}/CMakeLists.txt" @ONLY)
+  configure_file("${RunCMake_SOURCE_DIR}/CMakePresets.json.in"
+                 "${src}/CMakePresets.json" @ONLY)
+  file(REMOVE_RECURSE "${bin}")
+  ctest_source_dir_generator_args(generator_args)
+  set(RunCMake_TEST_SOURCE_DIR "${src}")
+  set(RunCMake_TEST_BINARY_DIR "${bin}")
+  set(RunCMake_TEST_NO_CLEAN 1)
+  # Step 1: ctest -T Configure sets Site/BuildName in DartConfiguration.tcl.
+  run_cmake_command(ReuseBuildNameFromPresetBinaryDir-configure
+    ${CMAKE_CTEST_COMMAND}
+    --source-dir "${src}"
+    ${generator_args}
+    -M Experimental
+    -T Configure
+    -D "CTEST_PRESET=my-preset"
+    -D "CTEST_SITE=my-site"
+    -D "CTEST_BUILD_NAME=my-build-name")
+  # Step 2: ctest -T Update reuses Site/BuildName from above.
+  run_cmake_command(ReuseBuildNameFromPresetBinaryDir-update
+    ${CMAKE_CTEST_COMMAND}
+    --source-dir "${src}"
+    -M Experimental
+    -T Update
+    -D "CTEST_PRESET=my-preset"
+    -D "CTEST_UPDATE_COMMAND=${CMAKE_COMMAND}"
+    -D "CTEST_UPDATE_VERSION_ONLY=1"
+    -V)
+endblock()
+
 # Test --output-junit
 function(run_output_junit)
   set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/output-junit)
@@ -769,3 +1002,88 @@ run_cmake_command(Passthrough-build-and-test-empty-error ${CMAKE_CTEST_COMMAND}
     ${RunCMake_BINARY_DIR}/Passthrough-build-and-test-empty-error/does-not-exist
     ${RunCMake_BINARY_DIR}/Passthrough-build-and-test-empty-error/does-not-exist
   --build-generator "None" --)
+
+block()
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/CoverageTool)
+  set(RunCMake_TEST_NO_CLEAN 1)
+  file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
+  file(MAKE_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
+  file(WRITE "${RunCMake_TEST_BINARY_DIR}/DartConfiguration.tcl" "
+BuildDirectory: ${RunCMake_TEST_BINARY_DIR}
+CTestTestCoverageTool: LLVM-COV
+")
+  file(WRITE "${RunCMake_TEST_BINARY_DIR}/CTestTestfile.cmake" "
+add_test(test1 \"${CMAKE_COMMAND}\" -E true)
+")
+  run_cmake_command(CoverageTool ${CMAKE_CTEST_COMMAND} -V)
+  run_cmake_command(CoverageTool-T-Test ${CMAKE_CTEST_COMMAND} -V -T Test)
+endblock()
+
+# Verify that CTEST_* variables defined via the command-line are visible
+# from the CTest script.
+run_cmake_command(DashD-ScriptVars
+  ${CMAKE_CTEST_COMMAND}
+  "-S" "${RunCMake_SOURCE_DIR}/DashD-ScriptVars.cmake"
+  "-D" "CTEST_BUILD_NAME=cli-build-name"
+  "-D" "CTEST_SITE=cli-site"
+  "-D" "CTEST_BUILD_FLAGS=-O2 -Wall"
+  "-D" "CTEST_BUILD_TARGET=my-target"
+  "-D" "CTEST_CMAKE_GENERATOR=Ninja"
+  "-D" "CTEST_EXTRA_COVERAGE_GLOB=**/*.gcov"
+  "-D" "CTEST_TIME_LIMIT=3600"
+  )
+
+# Verify that CTEST_* variables defined via the command-line override
+# settings from the dashboard configuration file.
+block()
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/DashD-DashboardVar-build)
+  set(RunCMake_TEST_NO_CLEAN 1)
+  file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
+  file(MAKE_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
+  file(WRITE "${RunCMake_TEST_BINARY_DIR}/DartConfiguration.tcl"
+    "BuildName: original-build-name\nSite: original-site\nSourceDirectory: ${RunCMake_TEST_BINARY_DIR}\n")
+  run_cmake_command(DashD-DashboardVar
+    ${CMAKE_CTEST_COMMAND} -M Experimental -T Start
+    -D CTEST_BUILD_NAME=cli-build-name
+    )
+endblock()
+
+# Test CTEST_SUBMIT_PARTS: a valid part name reaches the network submission step.
+block()
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/SubmitParts-valid-build)
+  set(RunCMake_TEST_NO_CLEAN 1)
+  file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
+  file(MAKE_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
+  file(WRITE "${RunCMake_TEST_BINARY_DIR}/DartConfiguration.tcl"
+    "SourceDirectory: ${RunCMake_TEST_BINARY_DIR}\n"
+    "BuildDirectory: ${RunCMake_TEST_BINARY_DIR}\n"
+    "DropMethod: https\n"
+    "DropSite: badhostname.invalid\n"
+    "DropLocation: /submit.php?project=Test\n"
+    "CTestSubmitRetryCount: 0\n"
+  )
+  run_cmake_command(SubmitParts-valid-ctest
+    ${CMAKE_CTEST_COMMAND} -M Experimental -T Start -T Submit -VV
+    -D CTEST_SUBMIT_PARTS=Done
+  )
+endblock()
+
+# Test CTEST_SUBMIT_PARTS: an invalid part name produces a validation error.
+block()
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/SubmitParts-badpart-build)
+  set(RunCMake_TEST_NO_CLEAN 1)
+  file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
+  file(MAKE_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
+  file(WRITE "${RunCMake_TEST_BINARY_DIR}/DartConfiguration.tcl"
+    "SourceDirectory: ${RunCMake_TEST_BINARY_DIR}\n"
+    "BuildDirectory: ${RunCMake_TEST_BINARY_DIR}\n"
+    "DropMethod: https\n"
+    "DropSite: badhostname.invalid\n"
+    "DropLocation: /submit.php?project=Test\n"
+    "CTestSubmitRetryCount: 0\n"
+  )
+  run_cmake_command(SubmitParts-badpart-ctest
+    ${CMAKE_CTEST_COMMAND} -M Experimental -T Start -T Submit
+    -D CTEST_SUBMIT_PARTS=BadPart
+  )
+endblock()

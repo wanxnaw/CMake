@@ -6,6 +6,7 @@
 #include <sstream>
 #include <utility>
 
+#include <cm/filesystem>
 #include <cm/string_view>
 #include <cmext/string_view>
 
@@ -25,9 +26,9 @@
 #include "cmRange.h"
 #include "cmSourceFile.h"
 #include "cmState.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 
 cmCommonTargetGenerator::cmCommonTargetGenerator(cmGeneratorTarget* gt)
@@ -182,8 +183,8 @@ cmCommonTargetGenerator::GetLinkedTargetDirectories(
         this->GeneratorTarget->GetLinkInformation(config)) {
 
     auto findSyntheticTarget =
-      [this,
-       &config](cmGeneratorTarget const* linkee) -> cmGeneratorTarget const* {
+      [this, &config,
+       cli](cmGeneratorTarget const* linkee) -> cmGeneratorTarget const* {
       if (!linkee) {
         return nullptr;
       }
@@ -195,7 +196,7 @@ cmCommonTargetGenerator::GetLinkedTargetDirectories(
         return it->second.front();
       }
 
-      // Check linked targets to finding synthetic targets for transitive deps
+      // Check linked targets to find synthetic targets for transitive deps
       std::vector<cmGeneratorTarget const*> pending;
       std::set<cmGeneratorTarget const*> visited;
       for (auto const& dep : synthDeps) {
@@ -203,6 +204,19 @@ cmCommonTargetGenerator::GetLinkedTargetDirectories(
           if (synth && visited.insert(synth).second) {
             pending.push_back(synth);
           }
+        }
+      }
+
+      // Also seed the search from direct linked targets that have
+      // CXX20 module sources, in case they hold synthetic deps for
+      // transitive dependencies that we need to inherit. Skip targets
+      // that already have synthetic substitutes in our own synthDeps
+      // (their transitive deps will be explored via the substitute).
+      for (auto const& item : cli->GetItems()) {
+        if (item.Target && item.Target->HaveCxx20ModuleSources() &&
+            synthDeps.find(item.Target) == synthDeps.end() &&
+            visited.insert(item.Target).second) {
+          pending.push_back(item.Target);
         }
       }
 
@@ -244,7 +258,7 @@ cmCommonTargetGenerator::GetLinkedTargetDirectories(
           // We can ignore the INTERFACE_LIBRARY items because
           // Target->GetLinkInformation already processed their
           // link interface and they don't have any output themselves.
-          && (mappedLinkee->GetType() != cmStateEnums::INTERFACE_LIBRARY
+          && (mappedLinkee->GetType() != cm::TargetType::INTERFACE_LIBRARY
               // Synthesized targets may have relevant rules.
               || mappedLinkee->IsSynthetic()) &&
           ((lang == "CXX"_s && mappedLinkee->HaveCxx20ModuleSources()) ||
@@ -297,7 +311,7 @@ std::string cmCommonTargetGenerator::ComputeTargetCompilePDB(
   std::string const& config) const
 {
   std::string compilePdbPath;
-  if (this->GeneratorTarget->GetType() > cmStateEnums::OBJECT_LIBRARY) {
+  if (this->GeneratorTarget->GetType() > cm::TargetType::OBJECT_LIBRARY) {
     return compilePdbPath;
   }
 
@@ -311,7 +325,7 @@ std::string cmCommonTargetGenerator::ComputeTargetCompilePDB(
       compilePdbPath += config;
     }
     compilePdbPath += "/";
-    if (this->GeneratorTarget->GetType() == cmStateEnums::STATIC_LIBRARY) {
+    if (this->GeneratorTarget->GetType() == cm::TargetType::STATIC_LIBRARY) {
       // Match VS default for static libs: `$(IntDir)$(ProjectName).pdb`.
       compilePdbPath += this->GeneratorTarget->GetName();
       compilePdbPath += ".pdb";
@@ -652,4 +666,35 @@ bool cmCommonTargetGenerator::HaveRequiredLanguages(
     return valid;
   };
   return std::all_of(languagesNeeded.cbegin(), languagesNeeded.cend(), unary);
+}
+
+void cmCommonTargetGenerator::ComputeRustFlagsForObjects(
+  std::string& linkCrates, std::string& nativeObjects,
+  std::vector<std::string> const& objects)
+{
+  std::stringstream rlibsArgs;
+  std::stringstream objectsArgs;
+  auto const processObject = [&](std::string const& obj) {
+    cm::filesystem::path const objPath(obj);
+    if (objPath.extension() == ".rlib") {
+      // Drop the "lib..." prefix and the ".rs" suffix. The prefix is required
+      // by Rust on the crate rlib file, but is hidden from the user when using
+      // the crate from Rust source code, so we drop it to be consistent with
+      // common usage in Rust.
+      std::string objStem = objPath.stem().string();
+      objStem = objStem.substr(3, objStem.length() - 6);
+      rlibsArgs << " --extern=" << objStem << "="
+                << this->LocalCommonGenerator->ConvertToOutputFormat(
+                     obj, cmOutputConverter::SHELL);
+    } else {
+      objectsArgs << " -Clink-arg="
+                  << this->LocalCommonGenerator->ConvertToOutputFormat(
+                       obj, cmOutputConverter::SHELL);
+    }
+  };
+  for (auto const& obj : objects) {
+    processObject(obj);
+  }
+  linkCrates += rlibsArgs.str();
+  nativeObjects += objectsArgs.str();
 }

@@ -38,6 +38,7 @@
 #include "cmBuildOptions.h"
 #include "cmCMakePath.h"
 #include "cmCMakePresetsGraph.h"
+#include "cmCacheDocumentationTable.h"
 #include "cmCommandLineArgument.h"
 #include "cmCommands.h"
 #include "cmDocumentation.h"
@@ -83,13 +84,14 @@
 #  include <cm3p/json/writer.h>
 
 #  include "cmCMakePresetsArgs.h"
+#  include "cmCMakeSarifLogger.h"
 #  include "cmConfigureLog.h"
 #  include "cmFileAPI.h"
 #  include "cmGraphVizWriter.h"
 #  include "cmInstrumentation.h"
+#  include "cmInstrumentationInterrupt.h"
 #  include "cmInstrumentationQuery.h"
 #  include "cmMakefileProfilingData.h"
-#  include "cmSarifLog.h"
 #  include "cmVariableWatch.h"
 #endif
 
@@ -106,7 +108,6 @@
 #    include "cmGlobalFastbuildGenerator.h"
 #    include "cmGlobalJOMMakefileGenerator.h"
 #    include "cmGlobalNMakeMakefileGenerator.h"
-#    include "cmGlobalVisualStudio14Generator.h"
 #    include "cmGlobalVisualStudioVersionedGenerator.h"
 #    include "cmVSSetupHelper.h"
 
@@ -182,8 +183,7 @@ void cmDeprecatedWatch(std::string const& /*unused*/,
                        cmMakefile const* mf)
 {
   if (mf->GetPolicyStatus(cmPolicies::CMP0218) == cmPolicies::WARN) {
-    mf->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR,
-                        cmPolicies::GetPolicyWarning(cmPolicies::CMP0218));
+    mf->IssuePolicyWarning(cmPolicies::CMP0218);
   }
 }
 #endif
@@ -851,8 +851,12 @@ void cmake::ProcessCacheArg(std::string const& var, std::string const& value,
                  "Use -W[no-]error=deprecated instead.\n"_s;
   }
 
-  this->AddCacheEntry(
-    var, value, "No help, variable specified on the command line.", type);
+  auto const builtIn = cmCacheDocumentationTable::Get(var);
+  std::string const helpString = builtIn.Summary.empty()
+    ? std::string("No help, variable specified on the command line.")
+    : std::string(builtIn.Summary);
+
+  this->AddCacheEntry(var, value, helpString, type);
 
   if (warnUnusedCli != cmDiagnostics::Ignore) {
     if (!haveValue ||
@@ -1619,6 +1623,11 @@ void cmake::SetArgs(std::vector<std::string> const& args)
     this->SetHomeOutputDirectory(cmSystemTools::GetLogicalWorkingDirectory());
   }
 
+  if (this->State->GetRole() == cmState::Role::Script && havePreset) {
+    this->IssueMessage(MessageType::FATAL_ERROR,
+                       "Presets are not supported in CMake script mode.");
+  }
+
 #if !defined(CMAKE_BOOTSTRAP)
   if (presetsArgs.HasPresetsArg()) {
     this->SetArgsFromPreset(presetsArgs, haveBArg);
@@ -2182,6 +2191,9 @@ bool cmake::SetArgsFromPreset(cmCMakePresetsConfigureArgs const& args,
     this->SetTraceFile(expandedPreset->TraceRedirect);
   }
 
+  // Store preset variables in case of cache reset.
+  this->InitialPresetVariables = this->UnprocessedPresetVariables;
+
   return true;
 }
 
@@ -2364,11 +2376,11 @@ struct SaveCacheEntry
   cmStateEnums::CacheEntryType type;
 };
 
-int cmake::HandleDeleteCacheVariables(std::string const& var)
+int cmake::HandleDeleteCacheVariables(
+  std::map<std::string, std::string> const& vars)
 {
-  cmList argsSplit{ var, cmList::EmptyElements::Yes };
-  // erase the property to avoid infinite recursion
-  this->State->SetGlobalProperty("__CMAKE_DELETE_CACHE_CHANGE_VARS_", "");
+  // erase the set to avoid infinite recursion
+  this->State->ClearDeleteCacheChangeVars();
   if (this->GetIsInTryCompile()) {
     return 0;
   }
@@ -2378,18 +2390,11 @@ int cmake::HandleDeleteCacheVariables(std::string const& var)
     << "You have changed variables that require your cache to be deleted.\n"
        "Configure will be re-run and you may have to reset some variables.\n"
        "The following variables have changed:\n";
-  for (auto i = argsSplit.begin(); i != argsSplit.end(); ++i) {
+  for (auto const& var : vars) {
     SaveCacheEntry save;
-    save.key = *i;
-    warning << *i << "= ";
-    i++;
-    if (i != argsSplit.end()) {
-      save.value = *i;
-      warning << *i << '\n';
-    } else {
-      warning << '\n';
-      i -= 1;
-    }
+    save.key = var.first;
+    save.value = var.second;
+    warning << save.key << "= " << save.value << '\n';
     cmValue existingValue = this->State->GetCacheEntryValue(save.key);
     if (existingValue) {
       save.type = this->State->GetCacheEntryType(save.key);
@@ -2407,6 +2412,15 @@ int cmake::HandleDeleteCacheVariables(std::string const& var)
   this->DeleteCache(this->GetHomeOutputDirectory());
   // load the empty cache
   this->LoadCache();
+#ifndef CMAKE_BOOTSTRAP
+  // Restore preset cache variables.
+  this->UnprocessedPresetVariables = this->InitialPresetVariables;
+  this->ProcessPresetVariables();
+#endif
+  // Restore command line cache variables (from this invocation cmake only).
+  bool resetArgsSuccess = this->SetCacheArgs(this->cmdArgs);
+  assert(resetArgsSuccess);
+  (void)resetArgsSuccess;
   // restore the changed compilers
   for (SaveCacheEntry const& i : saved) {
     this->AddCacheEntry(i.key, i.value, i.help, i.type);
@@ -2415,6 +2429,15 @@ int cmake::HandleDeleteCacheVariables(std::string const& var)
   // avoid reconfigure if there were errors
   if (!cmSystemTools::GetErrorOccurredFlag()) {
     // re-run configure
+    this->State->SetReconfiguring(true);
+    return this->Configure();
+  }
+
+  // Toolchain changes trigger a fatal error, but reconfiguring with the new
+  // toolchain should fix them.
+  if (vars.count("CMAKE_TOOLCHAIN_FILE") && !this->State->IsReconfiguring()) {
+    cmSystemTools::ResetErrorOccurredFlag();
+    this->State->SetReconfiguring(true);
     return this->Configure();
   }
   return 0;
@@ -2513,10 +2536,10 @@ int cmake::Configure()
                       cmStateEnums::INTERNAL);
 
   int ret = this->ActualConfigure();
-  cmValue delCacheVars =
-    this->State->GetGlobalProperty("__CMAKE_DELETE_CACHE_CHANGE_VARS_");
-  if (delCacheVars && !delCacheVars->empty()) {
-    return this->HandleDeleteCacheVariables(*delCacheVars);
+  std::map<std::string, std::string> delCacheVars =
+    this->State->GetDeleteCacheChangeVars();
+  if (!delCacheVars.empty()) {
+    return this->HandleDeleteCacheVariables(delCacheVars);
   }
   return ret;
 }
@@ -2793,7 +2816,10 @@ int cmake::ActualConfigure()
     return 0;
   };
   int ret = this->Instrumentation->InstrumentCommand(
-    "configure", this->cmdArgs, [doConfigure]() { return doConfigure(); },
+    "configure", this->cmdArgs,
+    [doConfigure]() -> cmInstrumentation::CommandResult {
+      return { doConfigure(), cm::nullopt, cm::nullopt };
+    },
     cm::nullopt, cm::nullopt,
     this->GetIsInTryCompile() ? cmInstrumentation::LoadQueriesAfter::No
                               : cmInstrumentation::LoadQueriesAfter::Yes);
@@ -2897,23 +2923,6 @@ std::unique_ptr<cmGlobalGenerator> cmake::EvaluateDefaultGlobalGenerator()
   std::string found;
   // Try to find the newest VS installed on the computer and
   // use that as a default if -G is not specified
-  std::string const vsregBase = "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\";
-  static char const* const vsVariants[] = {
-    /* clang-format needs this comment to break after the opening brace */
-    "VisualStudio\\", "VCExpress\\", "WDExpress\\"
-  };
-  struct VSVersionedGenerator
-  {
-    char const* MSVersion;
-    char const* GeneratorName;
-  };
-  static VSVersionedGenerator const vsGenerators[] = {
-    { "14.0", "Visual Studio 14 2015" }, //
-  };
-  static char const* const vsEntries[] = {
-    "\\Setup\\VC;ProductDir", //
-    ";InstallDir"             //
-  };
   if (cmVSSetupAPIHelper(18).IsVSInstalled()) {
     found = "Visual Studio 18 2026";
   } else if (cmVSSetupAPIHelper(17).IsVSInstalled()) {
@@ -2922,23 +2931,6 @@ std::unique_ptr<cmGlobalGenerator> cmake::EvaluateDefaultGlobalGenerator()
     found = "Visual Studio 16 2019";
   } else if (cmVSSetupAPIHelper(15).IsVSInstalled()) {
     found = "Visual Studio 15 2017";
-  } else {
-    for (VSVersionedGenerator const* g = cm::cbegin(vsGenerators);
-         found.empty() && g != cm::cend(vsGenerators); ++g) {
-      for (char const* const* v = cm::cbegin(vsVariants);
-           found.empty() && v != cm::cend(vsVariants); ++v) {
-        for (char const* const* e = cm::cbegin(vsEntries);
-             found.empty() && e != cm::cend(vsEntries); ++e) {
-          std::string const reg = vsregBase + *v + g->MSVersion + *e;
-          std::string dir;
-          if (cmSystemTools::ReadRegistryValue(reg, dir,
-                                               cmSystemTools::KeyWOW64_32) &&
-              cmSystemTools::PathExists(dir)) {
-            found = g->GeneratorName;
-          }
-        }
-      }
-    }
   }
   auto gen = this->CreateGlobalGenerator(found);
   if (!gen) {
@@ -3063,11 +3055,7 @@ int cmake::Run(std::vector<std::string> const& args, bool noconfigure)
 
 #ifndef CMAKE_BOOTSTRAP
   // Configure the SARIF log for the current run
-  cmSarif::LogFileWriter sarifLogFileWriter(
-    this->GetMessenger()->GetSarifResultsLog());
-  if (!sarifLogFileWriter.ConfigureForCMakeRun(*this)) {
-    return -1;
-  }
+  cmCMakeSarifLogger sarifLogger(*this);
 
   this->VariableWatch->AddWatch("CMAKE_WARN_DEPRECATED", cmDeprecatedWatch);
   this->VariableWatch->AddWatch("CMAKE_ERROR_DEPRECATED", cmDeprecatedWatch);
@@ -3099,16 +3087,6 @@ int cmake::Run(std::vector<std::string> const& args, bool noconfigure)
       cmSystemTools::Error("Error executing cmake::LoadCache(). Aborting.\n");
       return -1;
     }
-#ifndef CMAKE_BOOTSTRAP
-    // If no SARIF file has been explicitly specified, use the default path
-    if (!this->SarifFileOutput) {
-      // If no output file is specified, use the default path
-      // Enable parent directory creation for the default path
-      sarifLogFileWriter.SetPath(cmStrCat(this->GetHomeOutputDirectory(), '/',
-                                          cmSarif::PROJECT_DEFAULT_SARIF_FILE),
-                                 true);
-    }
-#endif
   } else {
     if (this->FreshCache) {
       cmSystemTools::Error("--fresh allowed only when configuring a project");
@@ -3142,11 +3120,6 @@ int cmake::Run(std::vector<std::string> const& args, bool noconfigure)
     }
     return this->HasScriptModeExitCode() ? this->GetScriptModeExitCode() : 0;
   }
-
-#ifndef CMAKE_BOOTSTRAP
-  // CMake only responds to the SARIF variable in normal mode
-  this->MarkCliAsUsed(cmSarif::PROJECT_SARIF_FILE_VARIABLE);
-#endif
 
   // If MAKEFLAGS are given in the environment, remove the environment
   // variable.  This will prevent try-compile from succeeding when it
@@ -3245,7 +3218,10 @@ int cmake::Generate()
   };
 
   int ret = this->Instrumentation->InstrumentCommand(
-    "generate", this->cmdArgs, [doGenerate]() { return doGenerate(); });
+    "generate", this->cmdArgs,
+    [doGenerate]() -> cmInstrumentation::CommandResult {
+      return { doGenerate(), cm::nullopt, cm::nullopt };
+    });
   if (ret != 0) {
     return ret;
   }
@@ -3384,7 +3360,6 @@ void cmake::AddDefaultGenerators()
     cmGlobalVisualStudioVersionedGenerator::NewFactory16());
   this->Generators.push_back(
     cmGlobalVisualStudioVersionedGenerator::NewFactory15());
-  this->Generators.push_back(cmGlobalVisualStudio14Generator::NewFactory());
   this->Generators.push_back(cmGlobalBorlandMakefileGenerator::NewFactory());
   this->Generators.push_back(cmGlobalNMakeMakefileGenerator::NewFactory());
   this->Generators.push_back(cmGlobalJOMMakefileGenerator::NewFactory());
@@ -3864,9 +3839,10 @@ int cmake::GetSystemInformation(std::vector<std::string>& args)
       return 1;
     }
     std::vector<std::string> args2;
-    args2.push_back(args[0]);
-    args2.push_back(destPath);
-    args2.push_back("-DRESULT_FILE=" + resultFile);
+    args2.reserve(3);
+    args2.emplace_back(args[0]);
+    args2.emplace_back(destPath);
+    args2.emplace_back("-DRESULT_FILE=" + resultFile);
     int res = this->Run(args2, false);
 
     if (res != 0) {
@@ -3906,9 +3882,9 @@ void cmake::IssueMessage(MessageType t, std::string const& text,
 void cmake::IssueDiagnostic(cmDiagnosticCategory category,
                             std::string const& text,
                             cmStateSnapshot const& state,
-                            cmListFileBacktrace const& backtrace) const
+                            cmDiagnosticContext const& context) const
 {
-  this->Messenger->IssueDiagnostic(category, text, state, backtrace);
+  this->Messenger->IssueDiagnostic(category, text, state, context);
 }
 
 std::vector<std::string> cmake::GetDebugConfigs()
@@ -4120,7 +4096,7 @@ int cmake::Build(cmBuildArgs buildArgs, std::vector<std::string> targets,
   // to limitations of the underlying build system.
   std::string const stampList =
     cmStrCat(cachePath, "/CMakeFiles/",
-             cmGlobalVisualStudio14Generator::GetGenerateStampList());
+             cmGlobalVisualStudioVersionedGenerator::GetGenerateStampList());
 
   // Note that the stampList file only exists for VS generators.
   if (cmSystemTools::FileExists(stampList) &&
@@ -4182,8 +4158,30 @@ int cmake::Build(cmBuildArgs buildArgs, std::vector<std::string> targets,
   // Block the instrumentation build daemon from spawning during this build.
   // This lock will be released when the process exits at the end of the build.
   instrumentation.LockBuildDaemon();
-  int buildresult =
-    instrumentation.InstrumentCommand("cmakeBuild", args, doBuild);
+  // Run the build under an interrupt handler so that a user interrupt (e.g.
+  // Ctrl+C) still writes the overall `cmakeBuild` snippet before we exit.
+  cmInstrumentationInterrupt::InterruptOutcome buildOutcome =
+    cmInstrumentationInterrupt::HandleInterrupt(
+      instrumentation.HasQuery(),
+      [&instrumentation, &args, &doBuild]() -> int {
+        return instrumentation.InstrumentCommand(
+          "cmakeBuild", args,
+          [&doBuild]() -> cmInstrumentation::CommandResult {
+            return { doBuild(), cm::nullopt, cm::nullopt };
+          });
+      });
+  int buildresult = buildOutcome.ExitCode;
+  if (buildOutcome.Interrupted) {
+    // The build was interrupted and its snippet has been written.  Skip the
+    // post-build indexing hook (which would run callbacks and delete data).
+    // For a real OS interrupt, re-raise so the exit status reflects it; for a
+    // test-injected interrupt, exit cleanly.  The next indexing run will
+    // reclaim the snippet written above.
+    if (buildOutcome.ShouldRaise) {
+      cmInstrumentationInterrupt::RaiseInterrupt(buildOutcome.Signal);
+    }
+    return buildresult;
+  }
   instrumentation.CollectTimingData(
     cmInstrumentationQuery::Hook::PostCMakeBuild);
 #else
@@ -4369,6 +4367,15 @@ int cmake::Workflow(cmCMakePresetsWorkflowArgs const& args)
     }
   };
 
+  auto buildPresetCommand = [&args](std::vector<std::string> cmd,
+                                    std::string const& presetName) {
+    cmd.insert(cmd.end(), { "--preset", presetName });
+    if (!args.PresetsFile.empty()) {
+      cmd.insert(cmd.end(), { "--presets-file", args.PresetsFile });
+    }
+    return cmd;
+  };
+
   std::vector<CalculatedStep> steps;
   steps.reserve(expandedPreset->Steps.size());
   int stepNumber = 1;
@@ -4382,9 +4389,8 @@ int cmake::Workflow(cmCMakePresetsWorkflowArgs const& args)
         if (!configurePreset) {
           return 1;
         }
-        std::vector<std::string> configureCmdArgs{
-          cmSystemTools::GetCMakeCommand(), "--preset", step.PresetName
-        };
+        std::vector<std::string> configureCmdArgs = buildPresetCommand(
+          { cmSystemTools::GetCMakeCommand() }, step.PresetName);
         if (args.Fresh) {
           configureCmdArgs.emplace_back("--fresh");
         }
@@ -4397,10 +4403,10 @@ int cmake::Workflow(cmCMakePresetsWorkflowArgs const& args)
         if (!buildPreset) {
           return 1;
         }
-        steps.emplace_back(
-          stepNumber, "build"_s, step.PresetName,
-          buildWorkflowStep({ cmSystemTools::GetCMakeCommand(), "--build",
-                              "--preset", step.PresetName }));
+        std::vector<std::string> buildCmdArgs = buildPresetCommand(
+          { cmSystemTools::GetCMakeCommand(), "--build" }, step.PresetName);
+        steps.emplace_back(stepNumber, "build"_s, step.PresetName,
+                           buildWorkflowStep(buildCmdArgs));
       } break;
       case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::Test: {
         auto const* testPreset = this->FindPresetForWorkflow(
@@ -4408,10 +4414,10 @@ int cmake::Workflow(cmCMakePresetsWorkflowArgs const& args)
         if (!testPreset) {
           return 1;
         }
-        steps.emplace_back(
-          stepNumber, "test"_s, step.PresetName,
-          buildWorkflowStep({ cmSystemTools::GetCTestCommand(), "--preset",
-                              step.PresetName }));
+        std::vector<std::string> testCmdArgs = buildPresetCommand(
+          { cmSystemTools::GetCTestCommand() }, step.PresetName);
+        steps.emplace_back(stepNumber, "test"_s, step.PresetName,
+                           buildWorkflowStep(testCmdArgs));
       } break;
       case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::Package: {
         auto const* packagePreset = this->FindPresetForWorkflow(
@@ -4419,10 +4425,10 @@ int cmake::Workflow(cmCMakePresetsWorkflowArgs const& args)
         if (!packagePreset) {
           return 1;
         }
-        steps.emplace_back(
-          stepNumber, "package"_s, step.PresetName,
-          buildWorkflowStep({ cmSystemTools::GetCPackCommand(), "--preset",
-                              step.PresetName }));
+        std::vector<std::string> packageCmdArgs = buildPresetCommand(
+          { cmSystemTools::GetCPackCommand() }, step.PresetName);
+        steps.emplace_back(stepNumber, "package"_s, step.PresetName,
+                           buildWorkflowStep(packageCmdArgs));
       } break;
     }
     stepNumber++;

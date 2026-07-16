@@ -449,7 +449,7 @@ executable.
   </details>
 
 Next we need to describe the source files. For the implementation file,
-``MathFunctions.cxx``, this is straight-forward; for the header file
+``MathFunctions.cxx``, this is straightforward; for the header file
 ``MathFunctions.h`` we will need to use a ``FILE_SET``.
 
 We can either give this ``FILE_SET`` its own name, or use the shortcut of naming
@@ -596,7 +596,7 @@ Continue to edit files from ``Step1``. Start on ``TODO 7`` and complete through
 ``TODO 9``. In this exercise, we need to add the ``MathFunctions`` target to
 the ``Tutorial`` target's linked libraries using :command:`target_link_libraries`.
 
-After modifying the CML, update ``tutorial.cxx`` to use the
+After modifying the CML, update ``Tutorial.cxx`` to use the
 ``mathfunctions::sqrt()`` function instead of ``std::sqrt``.
 
 Build and Run

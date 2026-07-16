@@ -13,6 +13,7 @@
 
 class cmListFileBacktrace;
 class cmGeneratorExpression;
+class cmGeneratorTarget;
 class cmLocalGenerator;
 class cmTest;
 
@@ -23,6 +24,25 @@ class cmTest;
 class cmTestGenerator : public cmScriptGenerator
 {
 public:
+  struct BuildDependencies
+  {
+    // A file dependency together with how the build produces it.
+    struct FileDependency
+    {
+      std::string Path;
+      // The single build-system target that produces Path as a primary
+      // custom-command output, or nullptr if there is no such unique target.
+      cmGeneratorTarget* Owner = nullptr;
+      // Whether Path is produced by the build at all (output or byproduct).
+      bool Generated = false;
+    };
+    // Build-system targets the test depends on (filtered to targets that are
+    // part of the build system).
+    std::vector<cmGeneratorTarget*> Targets;
+    // BUILD_DEPENDS entries that did not name a target.
+    std::vector<FileDependency> Files;
+  };
+
   cmTestGenerator(cmTest* test,
                   std::vector<std::string> const& configurations =
                     std::vector<std::string>());
@@ -32,6 +52,7 @@ public:
   cmTestGenerator& operator=(cmTestGenerator const&) = delete;
 
   void Compute(cmLocalGenerator* lg);
+  bool GetBuildDependencies(cmLocalGenerator* lg, BuildDependencies& deps);
 
   /** Test if this generator installs the test for a given configuration.  */
   bool TestsForConfig(std::string const& config);

@@ -29,7 +29,6 @@
 #include "cmGeneratedFileStream.h"
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorFileSet.h"
-#include "cmGeneratorFileSets.h"
 #include "cmGeneratorOptions.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalUnixMakefileGenerator3.h"
@@ -57,6 +56,7 @@
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 #include "cmake.h"
 
@@ -96,17 +96,17 @@ std::unique_ptr<cmMakefileTargetGenerator> cmMakefileTargetGenerator::New(
   std::unique_ptr<cmMakefileTargetGenerator> result;
 
   switch (tgt->GetType()) {
-    case cmStateEnums::EXECUTABLE:
+    case cm::TargetType::EXECUTABLE:
       result = cm::make_unique<cmMakefileExecutableTargetGenerator>(tgt);
       break;
-    case cmStateEnums::STATIC_LIBRARY:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::MODULE_LIBRARY:
-    case cmStateEnums::OBJECT_LIBRARY:
+    case cm::TargetType::STATIC_LIBRARY:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
+    case cm::TargetType::OBJECT_LIBRARY:
       result = cm::make_unique<cmMakefileLibraryTargetGenerator>(tgt);
       break;
-    case cmStateEnums::INTERFACE_LIBRARY:
-    case cmStateEnums::UTILITY:
+    case cm::TargetType::INTERFACE_LIBRARY:
+    case cm::TargetType::UTILITY:
       result = cm::make_unique<cmMakefileUtilityTargetGenerator>(tgt);
       break;
     default:
@@ -665,6 +665,10 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
   std::string const config = this->GetConfigName();
   std::string const configUpper = cmSystemTools::UpperCase(config);
 
+  // lookup for the associated file set, if any.
+  auto const* fileSet =
+    this->GeneratorTarget->GetFileSetForSource(config, &source);
+
   // Add precompile headers dependencies
   std::vector<std::string> pchArchs =
     this->GeneratorTarget->GetPchArchs(config, lang);
@@ -682,7 +686,9 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
     }
   }
 
-  if (!pchSources.empty() && !source.GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        source.GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     for (std::string const& arch : pchArchs) {
       std::string const& pchHeader =
         this->GeneratorTarget->GetPchHeader(config, lang, arch);
@@ -751,11 +757,6 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
       ispcHeaderRelative, cmOutputConverter::SHELL);
   }
 
-  // lookup for the associated file set, if any.
-  auto const* fileSet =
-    this->GeneratorTarget->GetGeneratorFileSets()->GetFileSetForSource(
-      config, &source);
-
   // Add flags from source file properties.
   std::string const COMPILE_FLAGS("COMPILE_FLAGS");
   if (cmValue cflags = source.GetProperty(COMPILE_FLAGS)) {
@@ -794,7 +795,9 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
   }
 
   // Add precompile headers compile options.
-  if (!pchSources.empty() && !source.GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        source.GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     std::string pchOptions;
     auto const pchIt = pchSources.find(source.GetFullPath());
     if (pchIt != pchSources.end()) {
@@ -913,10 +916,10 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
     std::string targetFullPathPDB;
     std::string targetFullPathCompilePDB =
       this->ComputeTargetCompilePDB(this->GetConfigName());
-    if (this->GeneratorTarget->GetType() == cmStateEnums::EXECUTABLE ||
-        this->GeneratorTarget->GetType() == cmStateEnums::STATIC_LIBRARY ||
-        this->GeneratorTarget->GetType() == cmStateEnums::SHARED_LIBRARY ||
-        this->GeneratorTarget->GetType() == cmStateEnums::MODULE_LIBRARY) {
+    if (this->GeneratorTarget->GetType() == cm::TargetType::EXECUTABLE ||
+        this->GeneratorTarget->GetType() == cm::TargetType::STATIC_LIBRARY ||
+        this->GeneratorTarget->GetType() == cm::TargetType::SHARED_LIBRARY ||
+        this->GeneratorTarget->GetType() == cm::TargetType::MODULE_LIBRARY) {
       targetFullPathReal = this->GeneratorTarget->GetFullPath(
         this->GetConfigName(), cmStateEnums::RuntimeBinaryArtifact, true);
       targetFullPathPDB = cmStrCat(
@@ -976,6 +979,7 @@ void cmMakefileTargetGenerator::WriteObjectRuleFiles(
   vars.Flags = flags.c_str();
   vars.ISPCHeader = ispcHeaderForShell.c_str();
   vars.Config = this->GetConfigName().c_str();
+  vars.RustEmit = source.GetRustEmitProperty()->c_str();
 
   std::string definesString = cmStrCat("$(", lang, "_DEFINES)");
 
@@ -2020,7 +2024,7 @@ void cmMakefileTargetGenerator::AppendTargetDepends(
   std::vector<std::string>& depends, bool ignoreType)
 {
   // Static libraries never depend on anything for linking.
-  if (this->GeneratorTarget->GetType() == cmStateEnums::STATIC_LIBRARY &&
+  if (this->GeneratorTarget->GetType() == cm::TargetType::STATIC_LIBRARY &&
       !ignoreType) {
     return;
   }
@@ -2052,6 +2056,12 @@ void cmMakefileTargetGenerator::AppendObjectDepends(
 
   // Add dependencies on the external object files.
   cm::append(depends, this->ExternalObjects);
+
+  // Add dependency on the Rust main crate root file.
+  if (cmSourceFile const* mainCrateRoot =
+        this->GeneratorTarget->GetRustMainCrateRoot(this->GetConfigName())) {
+    depends.push_back(mainCrateRoot->GetFullPath());
+  }
 
   // Add a dependency on the rule file itself.
   this->LocalGenerator->AppendRuleDepend(depends,
@@ -2324,6 +2334,33 @@ void cmMakefileTargetGenerator::CreateObjectLists(
     buildObjs =
       cmStrCat("$(", variableName, ") $(", variableNameExternal, ')');
   }
+}
+
+bool cmMakefileTargetGenerator::CreateRustLinkArguments(
+  std::string const& linkLanguage, std::string& rustMainCrateRootPath,
+  std::string& rustLinkCrates, std::string& rustNativeObjects)
+{
+  if (linkLanguage == "Rust") {
+    this->ComputeRustFlagsForObjects(rustLinkCrates, rustNativeObjects,
+                                     this->Objects);
+    this->ComputeRustFlagsForObjects(rustLinkCrates, rustNativeObjects,
+                                     this->ExternalObjects);
+
+    cmSourceFile const* mainCrateRoot =
+      this->GeneratorTarget->GetRustMainCrateRoot(this->GetConfigName());
+    if (!mainCrateRoot) {
+      this->Makefile->IssueMessage(MessageType::FATAL_ERROR,
+                                   "Target " +
+                                     this->GeneratorTarget->GetName() +
+                                     " has no main crate root.");
+      return false;
+    }
+    rustMainCrateRootPath = mainCrateRoot->GetFullPath();
+    rustMainCrateRootPath = this->LocalGenerator->ConvertToOutputFormat(
+      rustMainCrateRootPath, cmOutputConverter::SHELL);
+    return true;
+  }
+  return false;
 }
 
 void cmMakefileTargetGenerator::AddIncludeFlags(std::string& flags,

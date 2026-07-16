@@ -14,6 +14,7 @@
 #include <utility>
 
 #include <cm/memory>
+#include <cm/optional>
 
 #include "cmsys/RegularExpression.hxx"
 
@@ -24,6 +25,7 @@
 #include "cmMakefile.h"
 #include "cmRange.h"
 #include "cmState.h"
+#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmStringReplaceHelper.h"
 #include "cmSystemTools.h"
@@ -92,6 +94,24 @@ std::string OutputVarFor(cm::string_view prefix, cmMakefile& makefile)
   return cmStrCat(prefix, hash, "_");
 }
 
+void RequireFunction(cmMakefile const& makefile,
+                     std::string const& functionName,
+                     std::string const& errorPrefix)
+{
+  cm::optional<cmStateEnums::CommandType> type =
+    makefile.GetState()->GetCommandType(functionName);
+  if (!type) {
+    throw cmList::transform_error(
+      cmStrCat(errorPrefix, ": unknown function \"", functionName, "\"."));
+  }
+  if (*type == cmStateEnums::CommandType::Macro) {
+    throw cmList::transform_error(
+      cmStrCat(errorPrefix, ": macro \"", functionName,
+               "\" may not be used here;"
+               " define it as a function() instead."));
+  }
+}
+
 class PredicateEvaluator
 {
 public:
@@ -103,11 +123,7 @@ public:
     , ErrorPrefix(std::move(errorPrefix))
     , OutputVar(OutputVarFor("_cmake_predicate_out_", makefile))
   {
-    if (!makefile.GetState()->GetCommand(this->FunctionName)) {
-      throw cmList::transform_error(cmStrCat(this->ErrorPrefix,
-                                             ": unknown function \"",
-                                             this->FunctionName, "\"."));
-    }
+    RequireFunction(makefile, this->FunctionName, this->ErrorPrefix);
   }
 
   bool operator()(std::string const& value)
@@ -176,11 +192,8 @@ public:
     , Makefile(&makefile)
     , OutputVar(OutputVarFor("_cmake_comparator_out_", makefile))
   {
-    if (!makefile.GetState()->GetCommand(this->FunctionName)) {
-      throw cmList::transform_error(
-        cmStrCat("sub-command SORT, COMPARATOR: unknown function \"",
-                 this->FunctionName, "\"."));
-    }
+    RequireFunction(makefile, this->FunctionName,
+                    "sub-command SORT, COMPARATOR");
   }
 
   bool operator()(std::string const& a, std::string const& b)
@@ -369,7 +382,9 @@ cmList& cmList::sort(SortConfiguration cfg)
   return *this;
 }
 
-cmList& cmList::sort(SortConfiguration cfg, cmMakefile& makefile)
+cmList& cmList::sort(
+  SortConfiguration cfg,
+  std::function<bool(std::string const&, std::string const&)> comparator)
 {
   SortConfiguration config{ cfg };
 
@@ -381,11 +396,10 @@ cmList& cmList::sort(SortConfiguration cfg, cmMakefile& makefile)
   }
 
   try {
-    ComparatorEvaluator evaluator(config.ComparatorFunction, makefile);
     StringSorter sorter(
-      config, [&evaluator](std::string const& a, std::string const& b) {
-        bool result = evaluator(a, b);
-        if (result && evaluator(b, a)) {
+      config, [&comparator](std::string const& a, std::string const& b) {
+        bool result = comparator(a, b);
+        if (result && comparator(b, a)) {
           throw cmList::transform_error(
             "sub-command SORT, COMPARATOR: function does not induce a strict "
             "weak ordering. The comparator returned TRUE for both (a, b) and "
@@ -399,6 +413,19 @@ cmList& cmList::sort(SortConfiguration cfg, cmMakefile& makefile)
   }
 
   return *this;
+}
+
+cmList& cmList::sort(SortConfiguration cfg, cmMakefile& makefile)
+{
+  try {
+    ComparatorEvaluator evaluator(cfg.ComparatorFunction, makefile);
+    return this->sort(
+      cfg, [&evaluator](std::string const& a, std::string const& b) {
+        return evaluator(a, b);
+      });
+  } catch (transform_error& e) {
+    throw std::invalid_argument(e.what());
+  }
 }
 
 namespace {
@@ -422,6 +449,17 @@ public:
                          transform_type const& transform)
   {
     std::transform(list.begin(), list.end(), list.begin(), transform);
+  }
+
+  // Return, for each element, whether the selector selects it via InSelection.
+  virtual std::vector<bool> Selection(cmList::container_type const& list)
+  {
+    std::vector<bool> selected;
+    selected.reserve(list.size());
+    for (auto const& value : list) {
+      selected.push_back(this->InSelection(value));
+    }
+    return selected;
   }
 
 protected:
@@ -501,6 +539,19 @@ public:
     for (auto index : this->Indexes) {
       list[index] = transform(list[index]);
     }
+  }
+
+  // Select the computed Indexes; Validate throws transform_error on an
+  // out-of-range index.
+  std::vector<bool> Selection(cmList::container_type const& list) override
+  {
+    this->Validate(list.size());
+
+    std::vector<bool> selected(list.size(), false);
+    for (auto index : this->Indexes) {
+      selected[index] = true;
+    }
+    return selected;
   }
 
 protected:
@@ -798,12 +849,8 @@ public:
     this->Makefile = &makefile;
     this->OutputVar = OutputVarFor("_cmake_transform_apply_out_", makefile);
 
-    // Validate: command must exist
-    if (!makefile.GetState()->GetCommand(this->FunctionName)) {
-      throw transform_error(
-        cmStrCat("sub-command TRANSFORM, action APPLY: unknown function \"",
-                 this->FunctionName, "\"."));
-    }
+    RequireFunction(makefile, this->FunctionName,
+                    "sub-command TRANSFORM, action APPLY");
   }
 
   void Initialize(TransformSelector* /*selector*/,
@@ -1137,6 +1184,12 @@ cmList& cmList::transform(TransformAction action, std::string const& arg,
     });
 
   return *this;
+}
+
+std::vector<bool> cmList::GetTransformSelection(
+  cmList::TransformSelector& selector) const
+{
+  return static_cast<::TransformSelector&>(selector).Selection(this->Values);
 }
 
 std::string& cmList::append(std::string& list, std::string&& value)

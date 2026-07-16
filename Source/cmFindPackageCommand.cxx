@@ -42,6 +42,7 @@
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 #include "cmVersionMacros.h"
 #include "cmWindowsRegistry.h"
@@ -1566,9 +1567,7 @@ bool cmFindPackageCommand::FindModule(bool& found)
           this->Makefile->GetPolicyStatus(it->second);
         switch (status) {
           case cmPolicies::WARN: {
-            this->Makefile->IssueDiagnostic(
-              cmDiagnostics::CMD_AUTHOR,
-              cmStrCat(cmPolicies::GetPolicyWarning(it->second), '\n'));
+            this->Makefile->IssuePolicyWarning(it->second);
             CM_FALLTHROUGH;
           }
           case cmPolicies::OLD:
@@ -2080,7 +2079,7 @@ bool cmFindPackageCommand::ReadListFile(std::string const& f,
     ps = cm::PolicyScope::None;
   }
 
-  using ITScope = cmMakefile::ImportedTargetScope;
+  using ITScope = cm::ImportedTargetScope;
   ITScope scope = this->GlobalScope ? ITScope::Global : ITScope::Local;
   cmMakefile::SetGlobalTargetImportScope globScope(this->Makefile, scope);
 
@@ -2243,7 +2242,10 @@ bool cmFindPackageCommand::ImportPackageTargets(cmPackageState& packageState,
   }
 
   // Import base file.
-  if (!reader.ImportTargets(this->Makefile, this->Status, this->GlobalScope)) {
+  if (!reader.ImportTargets(this->Makefile, this->Status,
+                            this->GlobalScope
+                              ? cm::ImportedTargetScope::Global
+                              : cm::ImportedTargetScope::Local)) {
     return false;
   }
 

@@ -138,6 +138,8 @@ add_library(
   cmCMakePresetsGraphReadJSONTestPresets.cxx
   cmCMakePresetsGraphReadJSONWorkflowPresets.cxx
   cmCMakePresetsGraphResolve.cxx
+  cmCMakeSarifLogger.h
+  cmCMakeSarifLogger.cxx
   cmCMakeString.hxx
   cmCMakeString.cxx
   cmCommandLineArgument.h
@@ -189,6 +191,8 @@ add_library(
   cmDependsJavaParserHelper.h
   cmDependsCompiler.cxx
   cmDependsCompiler.h
+  cmDiagnosticContext.h
+  cmDiagnosticContext.cxx
   cmDiagnostics.h
   cmDiagnostics.cxx
   cmDocumentation.cxx
@@ -212,8 +216,10 @@ add_library(
   cmExportBuildFileGenerator.cxx
   cmExportBuildPackageInfoGenerator.h
   cmExportBuildPackageInfoGenerator.cxx
-  cmExportBuildSbomGenerator.h
-  cmExportBuildSbomGenerator.cxx
+  cmBuildSbomGenerator.h
+  cmBuildSbomGenerator.cxx
+  cmBuildSbomBuilder.h
+  cmBuildSbomBuilder.cxx
   cmExportCMakeConfigGenerator.h
   cmExportCMakeConfigGenerator.cxx
   cmExportFileGenerator.h
@@ -226,14 +232,12 @@ add_library(
   cmExportInstallFileGenerator.cxx
   cmExportInstallPackageInfoGenerator.h
   cmExportInstallPackageInfoGenerator.cxx
-  cmExportInstallSbomGenerator.h
-  cmExportInstallSbomGenerator.cxx
   cmExportPackageInfoGenerator.h
   cmExportPackageInfoGenerator.cxx
   cmExportTryCompileFileGenerator.h
   cmExportTryCompileFileGenerator.cxx
-  cmExportSbomGenerator.h
-  cmExportSbomGenerator.cxx
+  cmSbomBuilder.h
+  cmSbomBuilder.cxx
   cmExportSet.h
   cmExportSet.cxx
   cmExternalMakefileProjectGenerator.cxx
@@ -367,8 +371,10 @@ add_library(
   cmInstallRuntimeDependencySet.cxx
   cmInstallRuntimeDependencySetGenerator.h
   cmInstallRuntimeDependencySetGenerator.cxx
-  cmInstallSbomExportGenerator.h
-  cmInstallSbomExportGenerator.cxx
+  cmInstallSbomGenerator.h
+  cmInstallSbomGenerator.cxx
+  cmInstallSbomBuilder.h
+  cmInstallSbomBuilder.cxx
   cmInstallScriptGenerator.h
   cmInstallScriptGenerator.cxx
   cmInstallSubdirectoryGenerator.h
@@ -381,6 +387,8 @@ add_library(
   cmInstallScriptHandler.cxx
   cmInstrumentation.h
   cmInstrumentation.cxx
+  cmInstrumentationInterrupt.h
+  cmInstrumentationInterrupt.cxx
   cmInstrumentationCommand.h
   cmInstrumentationCommand.cxx
   cmInstrumentationQuery.h
@@ -479,8 +487,8 @@ add_library(
   cmRST.h
   cmRuntimeDependencyArchive.cxx
   cmRuntimeDependencyArchive.h
-  cmSarifLog.cxx
-  cmSarifLog.h
+  cmSarif.cxx
+  cmSarif.h
   cmScriptGenerator.h
   cmScriptGenerator.cxx
   cmSourceFile.cxx
@@ -510,18 +518,18 @@ add_library(
   cmStdIoTerminal.cxx
   cmStringAlgorithms.cxx
   cmStringAlgorithms.h
-  cmSyntheticTargetCache.h
   cmSystemTools.cxx
   cmSystemTools.h
   cmTarget.cxx
   cmTarget.h
+  cmTargetExport.h
   cmTargetPropertyComputer.cxx
   cmTargetPropertyComputer.h
   cmTargetPropertyEntry.cxx
   cmTargetPropertyEntry.h
-  cmTargetExport.h
   cmTargetTraceDependencies.cxx
   cmTargetTraceDependencies.h
+  cmTargetTypes.h
   cmTest.cxx
   cmTest.h
   cmTestGenerator.cxx
@@ -876,6 +884,22 @@ target_link_libraries(
     ZLIB::ZLIB
     llpkgc::llpkgc
   )
+
+# Built-in cache variable documentation table.  This is a committed,
+# hand-edited translation unit consumed by cmCacheManager to provide
+# fallback HELPSTRING values for cache entries that ship without one.
+# See the header comment in cmCacheDocumentationTable.cxx for the scope
+# and maintenance discipline.  The cmCachePatternTable sibling provides
+# the same service for placeholder-shaped variable names (CMAKE_<LANG>_*,
+# CMAKE_POLICY_DEFAULT_CMP<NNNN>, etc.) and is consulted as a fallback
+# inside cmCacheDocumentationTable::Get.  No code generation occurs at
+# build time.
+target_sources(CMakeLib PRIVATE
+  cmCacheDocumentationTable.h
+  cmCacheDocumentationTable.cxx
+  cmCachePatternTable.h
+  cmCachePatternTable.cxx
+)
 
 if(CMake_ENABLE_DEBUGGER)
   target_sources(

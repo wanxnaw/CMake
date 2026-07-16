@@ -1213,11 +1213,12 @@ Signatures
 
   .. code-block:: cmake
 
-    install(SBOM <sbom-name> EXPORT <export-name>
+    install(SBOM <sbom-name> EXPORTS <export-names>...
             [PROJECT <project-name>|NO_PROJECT_METADATA]
             [DESTINATION <dir>]
             [VERSION <major>[.<minor>[.<patch>[.<tweak>]]]]
-            [LICENSE <license-string>]
+            [DATA_LICENSE <license-string>]
+            [DEFAULT_LICENSE <license-string>]
             [DESCRIPTION <description-string>]
             [HOMEPAGE_URL <url-string>]
             [PACKAGE_URL <url-string>]
@@ -1232,9 +1233,11 @@ Signatures
   the interface is designed to allow additional SBOM formats or schema
   versions to be supported in future CMake releases.
 
-  Target installations are associated with the export ``<export-name>``
-  using the ``EXPORT`` option of the :command:`install(TARGETS)` signature
-  documented above. If ``DESTINATION`` is not specified, a platform-specific
+  Target installations are associated with each export ``<export-names>``
+  in the ``EXPORTS`` list using the ``EXPORTS`` option of the
+  :command:`install(TARGETS)` signature documented above.  A single SBOM may
+  cover multiple export sets; targets from all listed exports are aggregated
+  into one document.  If ``DESTINATION`` is not specified, a platform-specific
   default is used.
 
   Several options may be used to specify package metadata:
@@ -1258,16 +1261,21 @@ Signatures
 
     An informational canonical package URL for the project.
 
-  ``LICENSE <license-string>``
+  ``DATA_LICENSE <license-string>``
 
     A |SPDX|_ (SPDX) `License Expression`_ that describes the license(s) of the
-    project as a whole, including documentation, resources, or other materials
-    distributed with the project, in addition to software artifacts.  See the
-    SPDX `License List`_ for a list of commonly used licenses and their
-    identifiers.
+    SBOM data itself in the generated document.  See the SPDX `License List`_
+    for a list of commonly used licenses and their identifiers. In the SPDX
+    format, it corresponds to the `dataLicense`_ property.
 
     The license of individual components is taken from the
-    :prop_tgt:`SPDX_LICENSE` property of their respective targets.
+    :prop_tgt:`SPDX_LICENSE` property of their respective targets if set and
+    the ``DEFAULT_LICENSE`` otherwise.
+
+  ``DEFAULT_LICENSE <license-string>``
+
+    A |SPDX|_ (SPDX) `License Expression`_ that describes the license(s) of any
+    components which do not otherwise specify their license(s).
 
   ``DESCRIPTION <description-string>``
 
@@ -1418,5 +1426,6 @@ and by CPack. You can also invoke this script manually with
 
 .. _License Expression: https://spdx.github.io/spdx-spec/v3.0.1/annexes/spdx-license-expressions/
 .. _License List: https://spdx.org/licenses/
+.. _dataLicense: https://spdx.github.io/spdx-spec/v3.0.1/model/Core/Properties/dataLicense/
 
 .. |SBOM| replace:: Software Bill of Material

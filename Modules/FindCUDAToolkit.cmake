@@ -138,6 +138,7 @@ of the following libraries that are part of the CUDAToolkit:
 - `nvtx3`_
 - `OpenCL`_
 - `cuLIBOS`_
+- `cufilt`_
 
 CUDA Runtime Library
 """"""""""""""""""""
@@ -552,6 +553,20 @@ Target Created:
 - ``CUDA::sanitizer``
 
 .. _`NVIDIA Compute Sanitizer`: https://docs.nvidia.com/compute-sanitizer
+
+cufilt
+""""""
+
+.. versionadded:: 4.4
+
+The `cu++filt`_ binary utility also provides a static library for demangling
+CUDA C++ symbols.
+
+Targets Created:
+
+- ``CUDA::cufilt`` starting in CUDA 11.4
+
+.. _`cu++filt`: https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html#cu-filt
 
 Result Variables
 ^^^^^^^^^^^^^^^^
@@ -1038,19 +1053,24 @@ else()
   endif()
 endif()
 
-# Figure out the target directory when either crosscompiling
+# Figure out the target processor which is required to determine
+# our target dir ( linux ) or our lib dir ( windows )
+#
+# When a language is enabled we can use its compiler's target architecture.
+if(CMAKE_CUDA_COMPILER_LOADED AND CMAKE_CUDA_COMPILER_ARCHITECTURE_ID)
+  set(_CUDA_TARGET_PROCESSOR "${CMAKE_CUDA_COMPILER_ARCHITECTURE_ID}")
+elseif(CMAKE_CXX_COMPILER_LOADED AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID)
+  set(_CUDA_TARGET_PROCESSOR "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+elseif(CMAKE_C_COMPILER_LOADED AND CMAKE_C_COMPILER_ARCHITECTURE_ID)
+  set(_CUDA_TARGET_PROCESSOR "${CMAKE_C_COMPILER_ARCHITECTURE_ID}")
+elseif(CMAKE_SYSTEM_PROCESSOR)
+  set(_CUDA_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+# Figure out our crosscompiling targets dir
 # or if we don't have `nvcc` and need to deduce the target arch
 if(CMAKE_CROSSCOMPILING OR NOT CUDAToolkit_NVCC_EXECUTABLE)
-  # When a language is enabled we can use its compiler's target architecture.
-  if(CMAKE_CUDA_COMPILER_LOADED AND CMAKE_CUDA_COMPILER_ARCHITECTURE_ID)
-    set(_CUDA_TARGET_PROCESSOR "${CMAKE_CUDA_COMPILER_ARCHITECTURE_ID}")
-  elseif(CMAKE_CXX_COMPILER_LOADED AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID)
-    set(_CUDA_TARGET_PROCESSOR "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
-  elseif(CMAKE_C_COMPILER_LOADED AND CMAKE_C_COMPILER_ARCHITECTURE_ID)
-    set(_CUDA_TARGET_PROCESSOR "${CMAKE_C_COMPILER_ARCHITECTURE_ID}")
-  elseif(CMAKE_SYSTEM_PROCESSOR)
-    set(_CUDA_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
-  elseif(CMAKE_CROSSCOMPILING)
+  if(CMAKE_CROSSCOMPILING AND NOT _CUDA_TARGET_PROCESSOR)
     message(FATAL_ERROR "Cross-compiling with the CUDA toolkit requires CMAKE_SYSTEM_PROCESSOR to be set.")
   endif()
   # Keep in sync with equivalent table in CMakeDetermineCUDACompiler and FindCUDA!
@@ -1070,7 +1090,6 @@ if(CMAKE_CROSSCOMPILING OR NOT CUDAToolkit_NVCC_EXECUTABLE)
   elseif(_CUDA_TARGET_PROCESSOR STREQUAL "x86_64")
     set(CUDAToolkit_TARGET_NAMES "x86_64-linux")
   endif()
-  unset(_CUDA_TARGET_PROCESSOR)
 
   foreach(CUDAToolkit_TARGET_NAME IN LISTS CUDAToolkit_TARGET_NAMES)
     if(EXISTS "${CUDAToolkit_ROOT_DIR}/targets/${CUDAToolkit_TARGET_NAME}")
@@ -1095,11 +1114,19 @@ endif()
 
 # Determine windows search path suffix for libraries
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-  if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "AMD64")
+  if(_CUDA_TARGET_PROCESSOR STREQUAL "AMD64" OR
+      _CUDA_TARGET_PROCESSOR STREQUAL "x64" OR
+      _CUDA_TARGET_PROCESSOR STREQUAL "ARM64EC" # Can link x64, but not arm64.
+    )
     set(_CUDAToolkit_win_search_dirs lib/x64)
     set(_CUDAToolkit_win_stub_search_dirs lib/x64/stubs)
+  elseif(_CUDA_TARGET_PROCESSOR STREQUAL "ARM64")
+    set(_CUDAToolkit_win_search_dirs lib/arm64)
+    set(_CUDAToolkit_win_stub_search_dirs lib/arm64/stubs)
   endif()
 endif()
+
+unset(_CUDA_TARGET_PROCESSOR)
 
 # We don't need to verify the cuda_runtime header when we are using `nvcc` include paths
 # as the compiler being enabled means the header was found
@@ -1486,7 +1513,12 @@ if(CUDAToolkit_FOUND)
   endif()
 
   _CUDAToolkit_find_and_add_import_lib(nvml ALT nvidia-ml nvml)
-  _CUDAToolkit_find_and_add_import_lib(nvml_static ONLY_SEARCH_FOR libnvidia-ml.a libnvml.a)
+  if(NOT TARGET CUDA::nvml_static)
+    _CUDAToolkit_find_and_add_import_lib(nvml_static ONLY_SEARCH_FOR libnvidia-ml.a libnvml.a)
+    if(TARGET CUDA::nvml_static)
+      target_link_libraries(CUDA::nvml_static INTERFACE ${CMAKE_DL_LIBS})
+    endif()
+  endif()
 
   if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 10.0)
     # Header-only variant. Uses dlopen().
@@ -1512,7 +1544,7 @@ if(CUDAToolkit_FOUND)
         NAMES nvToolsExt64_1 nvToolsExt64 nvToolsExt
         PATHS ENV NVTOOLSEXT_PATH
               ENV CUDA_PATH
-        PATH_SUFFIXES lib/x64 lib
+        PATH_SUFFIXES ${_CUDAToolkit_win_search_dirs} lib
       )
     endif()
     _CUDAToolkit_find_and_add_import_lib(nvToolsExt ALT nvToolsExt64)
@@ -1538,23 +1570,29 @@ if(CUDAToolkit_FOUND)
     set_property(TARGET CUDA::bin2c PROPERTY IMPORTED_LOCATION "${CUDA_bin2c_EXECUTABLE}")
   endif()
 
-  _CUDAToolkit_find_and_add_import_lib(
-    sanitizer
-    ONLY_SEARCH_FOR sanitizer-public
-    EXTRA_PATH_SUFFIXES
-      "../compute-sanitizer"
-      "../../../compute-sanitizer"
-      "../Sanitizer"
-      "../../../Sanitizer"
-      "../extras/Sanitizer"
-      "../../../extras/Sanitizer"
-    EXTRA_INCLUDE_DIRS "${CUDAToolkit_CUPTI_INCLUDE_DIR}"
-  )
-  if(TARGET CUDA::sanitizer)
-    get_property(loc TARGET CUDA::sanitizer PROPERTY IMPORTED_LOCATION)
-    get_filename_component(sanitizer_dir "${loc}" DIRECTORY)
-    target_include_directories(CUDA::sanitizer INTERFACE "${sanitizer_dir}/include")
+  if(NOT TARGET CUDA::sanitizer)
+    _CUDAToolkit_find_and_add_import_lib(
+      sanitizer
+      ONLY_SEARCH_FOR sanitizer-public
+      EXTRA_PATH_SUFFIXES
+        "../compute-sanitizer"
+        "../../../compute-sanitizer"
+        "../Sanitizer"
+        "../../../Sanitizer"
+        "../extras/Sanitizer"
+        "../../../extras/Sanitizer"
+      EXTRA_INCLUDE_DIRS "${CUDAToolkit_CUPTI_INCLUDE_DIR}"
+    )
+    if(TARGET CUDA::sanitizer)
+      get_property(loc TARGET CUDA::sanitizer PROPERTY IMPORTED_LOCATION)
+      get_filename_component(sanitizer_dir "${loc}" DIRECTORY)
+      target_include_directories(CUDA::sanitizer INTERFACE "${sanitizer_dir}/include")
+    endif()
   endif()
+endif()
+
+if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 11.4)
+  _CUDAToolkit_find_and_add_import_lib(cufilt)
 endif()
 
 if(_CUDAToolkit_Pop_ROOT_PATH)

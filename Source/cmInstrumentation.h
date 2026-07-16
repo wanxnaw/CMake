@@ -24,13 +24,18 @@
 
 #include "cmFileLock.h"
 #include "cmInstrumentationQuery.h"
-#include "cmStateTypes.h"
 
 class cmGlobalGenerator;
+
+namespace cm {
+enum class TargetType;
+} // namespace cm
 
 class cmInstrumentation
 {
 public:
+  using Callback = cmInstrumentationQuery::Callback;
+
   enum class LoadQueriesAfter
   {
     Yes,
@@ -40,9 +45,16 @@ public:
                     LoadQueriesAfter loadQueries = LoadQueriesAfter::Yes);
   void LoadQueries();
   void CheckCDashVariable();
+  struct CommandResult
+  {
+    int ExitCode;
+    cm::optional<std::string> StdOut;
+    cm::optional<std::string> StdErr;
+  };
+
   int InstrumentCommand(
     std::string command_type, std::vector<std::string> const& command,
-    std::function<int()> const& callback,
+    std::function<CommandResult()> const& callback,
     cm::optional<std::map<std::string, std::string>> options = cm::nullopt,
     cm::optional<std::map<std::string, std::string>> arrayOptions =
       cm::nullopt,
@@ -53,14 +65,16 @@ public:
                              int64_t result,
                              std::chrono::steady_clock::time_point steadyStart,
                              std::chrono::system_clock::time_point systemStart,
-                             std::string config);
+                             std::string config,
+                             cm::optional<std::string> output = cm::nullopt);
   void GetPreTestStats();
   bool HasQuery() const;
   bool HasOption(cmInstrumentationQuery::Option option) const;
   bool HasHook(cmInstrumentationQuery::Hook hook) const;
   bool ReadJSONQueries(std::string const& directory);
   void ReadJSONQuery(std::string const& file);
-  void WriteJSONQuery(std::set<cmInstrumentationQuery::Option> const& options,
+  void WriteJSONQuery(cmInstrumentationQuery::Version dataVersion,
+                      std::set<cmInstrumentationQuery::Option> const& options,
                       std::set<cmInstrumentationQuery::Hook> const& hooks,
                       std::vector<std::vector<std::string>> const& callback);
   void AddCustomContent(std::string const& name, Json::Value const& contents);
@@ -90,9 +104,16 @@ private:
   Json::Value ReadJsonSnippet(std::string const& file_name);
   bool AcquireLock(std::string const& lock_file, cmFileLock& lock,
                    unsigned long timeout);
-  void WriteInstrumentationJson(Json::Value& index,
+  enum class Atomic
+  {
+    No,
+    Yes,
+  };
+  void WriteInstrumentationJson(cmInstrumentationQuery::Version version,
+                                Json::Value& index,
                                 std::string const& directory,
-                                std::string const& file_name);
+                                std::string const& file_name,
+                                Atomic atomic = Atomic::No);
   void InsertStaticSystemInformation(Json::Value& index);
   void GetDynamicSystemInformation(double& memory, double& load);
   void InsertDynamicSystemInformation(Json::Value& index,
@@ -105,9 +126,17 @@ private:
   static std::string ComputeSuffixHash(std::string const& command_str);
   static std::string ComputeSuffixTime(
     cm::optional<std::chrono::system_clock::time_point> time = cm::nullopt);
-  static bool IsInstrumentableTargetType(cmStateEnums::TargetType type);
+  static bool IsInstrumentableTargetType(cm::TargetType type);
   void PrepareDataForCDash(std::string const& data_dir,
                            std::string const& index_path);
+  std::string GetCompileTraceFile(std::vector<std::string> const& command,
+                                  Json::Value const& outputs,
+                                  std::string const& workingDir);
+  void CollectCompileTraceFile(Json::Value& root, std::string traceFile,
+                               long int oldTimestamp,
+                               std::string const& commandHash,
+                               std::string const& suffixTime);
+  void RemoveCompileTraceFile(Json::Value const& snippetData);
   void RemoveOldFiles(std::string const& dataSubdir);
   void WriteTraceFile(Json::Value const& index, std::string const& trace_name);
   Json::Value BuildTraceEvent(std::vector<uint64_t>& workers,
@@ -122,7 +151,7 @@ private:
   std::string dataDir;
   std::set<cmInstrumentationQuery::Option> options;
   std::set<cmInstrumentationQuery::Hook> hooks;
-  std::vector<std::string> callbacks;
+  std::vector<Callback> callbacks;
   std::vector<std::string> queryFiles;
   static std::map<std::string, std::string> cdashSnippetsMap;
   Json::Value preTestStats;

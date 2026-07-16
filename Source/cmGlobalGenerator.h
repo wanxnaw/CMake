@@ -24,14 +24,18 @@
 #include "cmBuildOptions.h"
 #include "cmCustomCommandLines.h"
 #include "cmDuration.h"
+#include "cmExportFileGenerator.h"
 #include "cmExportSet.h"
 #include "cmLocalGenerator.h"
+#include "cmSbomBuilder.h"
 #include "cmStateSnapshot.h"
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
 #include "cmTargetDepend.h"
+#include "cmTargetTypes.h"
+#include "cmTestGenerator.h"
 #include "cmValue.h"
 #include "cmXcFramework.h"
 
@@ -50,6 +54,8 @@ class cmBuildArgs;
 class cmDirectoryId;
 class cmExportBuildFileGenerator;
 class cmExternalMakefileProjectGenerator;
+class cmBuildSbomGenerator;
+class cmInstallSbomGenerator;
 class cmGeneratorTarget;
 class cmInstallRuntimeDependencySet;
 class cmLinkLineComputer;
@@ -93,7 +99,6 @@ struct GeneratedMakeCommand
   std::string QuotedPrintable() const;
 
   std::vector<std::string> PrimaryCommand;
-  bool RequiresOutputForward = false;
 };
 }
 namespace Json {
@@ -125,6 +130,10 @@ public:
 
   //! Get the name for this generator
   virtual std::string GetName() const { return "Generic"; }
+
+  virtual std::vector<std::string> GetTestBuildDependencyPaths(
+    std::string const& config,
+    cmTestGenerator::BuildDependencies const& deps) const;
 
   /** Check whether the given name matches the current generator.  */
   virtual bool MatchesGeneratorName(std::string const& name) const
@@ -240,11 +249,7 @@ public:
   void ResolveLanguageCompiler(std::string const& lang, cmMakefile* mf,
                                bool optional) const;
 
-  /**
-   * Try to determine system information, get it from another generator
-   */
-  void EnableLanguagesFromGenerator(cmGlobalGenerator* gen, cmMakefile* mf);
-
+  void SetupTryCompile(cmGlobalGenerator* gen, cmMakefile* mf);
   /**
    * Try running cmake and building a file. This is used for dynamically
    * loaded commands, not as part of the usual build process.
@@ -312,6 +317,11 @@ public:
 
   std::vector<cmGeneratorTarget*> GetLocalGeneratorTargetsInOrder(
     cmLocalGenerator* lg) const;
+
+  // Find the single build-system target that produces the given path as a
+  // primary custom-command output, or nullptr if there is none or more than
+  // one.  Used to resolve file-level test build dependencies.
+  cmGeneratorTarget* FindOutputOwningTarget(std::string const& output);
 
   cmMakefile* GetCurrentMakefile() const
   {
@@ -393,9 +403,9 @@ public:
 
   //! Find a target by name by searching the local generators.
   cmTarget* FindTarget(std::string const& name,
-                       cmStateEnums::TargetDomainSet domains = {
-                         cmStateEnums::TargetDomain::NATIVE,
-                         cmStateEnums::TargetDomain::ALIAS }) const;
+                       cm::TargetDomainSet domains = {
+                         cm::TargetDomain::NATIVE,
+                         cm::TargetDomain::ALIAS }) const;
 
   cmGeneratorTarget* FindGeneratorTarget(std::string const& name) const;
 
@@ -635,9 +645,54 @@ public:
   {
     return this->BuildExportSets;
   }
+  /** Scan all build-tree exports in the project and report which of them
+   *  reference `target`.  Used both by cmExportBuildFileGenerator (to resolve
+   *  out-of-export link references) and by cmSbomBuilder (to record which
+   *  export sets a target appears in for SBOM dependency tracking).  */
+  cmExportFileGenerator::ExportInfo FindBuildExportInfo(
+    cmGeneratorTarget const* target) const;
+
+  /** Same as FindBuildExportInfo, but searches install-tree export sets
+   *  (those registered via install(EXPORT ...)). */
+  cmExportFileGenerator::ExportInfo FindInstallExportInfo(
+    cmGeneratorTarget const* target) const;
+
+  /** Scan all build-tree SBOMs and report which of them cover `target`. */
+  cmSbomBuilder::SbomInfo FindBuildSbomInfo(
+    cmGeneratorTarget const* target) const;
+
+  /** Same as FindBuildSbomInfo, but searches install-tree SBOMs. */
+  cmSbomBuilder::SbomInfo FindInstallSbomInfo(
+    cmGeneratorTarget const* target) const;
   void AddBuildExportSet(cmExportBuildFileGenerator* gen);
   void AddBuildExportExportSet(cmExportBuildFileGenerator* gen);
+  void AddBuildSbomGenerator(cmBuildSbomGenerator* gen);
+  std::vector<cmBuildSbomGenerator*> const& GetBuildSbomGenerators() const
+  {
+    return this->BuildSbomGenerators;
+  }
+
+  // Project-wide registry of install(SBOM) generators.
+  void AddInstallSbomGenerator(cmInstallSbomGenerator const* gen);
+  std::vector<cmInstallSbomGenerator const*> const& GetInstallSbomGenerators()
+    const
+  {
+    return this->InstallSbomGenerators;
+  }
+
   bool IsExportedTargetsFile(std::string const& filename) const;
+
+  /** True if any registered cmBuildSbomGenerator already targets this
+   *  output file path.  Used to diagnose duplicate `export(SBOM ...)`
+   *  calls that would otherwise silently clobber each other's output. */
+  bool IsBuildSbomFile(std::string const& filepath) const;
+
+  /** True if any registered cmInstallSbomGenerator already targets this
+   *  install file path (DESTINATION + filename).  Used to diagnose
+   *  duplicate `install(SBOM ...)` calls that would otherwise silently
+   *  clobber each other at install time. */
+  bool IsInstallSbomFile(std::string const& filepath) const;
+
   cmExportBuildFileGenerator* GetExportedTargetsFile(
     std::string const& filename) const;
   void AddCMP0068WarnTarget(std::string const& target);
@@ -755,7 +810,7 @@ protected:
 
   virtual bool CheckALLOW_DUPLICATE_CUSTOM_TARGETS() const;
 
-  bool ApplyCXXStdTargets();
+  bool ApplyCXXStdTarget();
   bool DiscoverSyntheticTargets();
 
   bool AddHeaderSetVerification();
@@ -824,11 +879,13 @@ protected:
   cmExportSetMap ExportSets;
   std::map<std::string, cmExportBuildFileGenerator*> BuildExportSets;
   std::map<std::string, cmExportBuildFileGenerator*> BuildExportExportSets;
+  std::vector<cmBuildSbomGenerator*> BuildSbomGenerators;
+  std::vector<cmInstallSbomGenerator const*> InstallSbomGenerators;
 
   std::map<std::string, std::string> AliasTargets;
 
   cmTarget* FindTargetImpl(std::string const& name,
-                           cmStateEnums::TargetDomainSet domains) const;
+                           cm::TargetDomainSet domains) const;
 
   cmGeneratorTarget* FindGeneratorTargetImpl(std::string const& name) const;
 
@@ -870,10 +927,8 @@ private:
   std::map<cmGeneratorTarget const*, size_t> TargetOrderIndex;
 
   cmMakefile* TryCompileOuterMakefile;
-  // If you add a new map here, make sure it is copied
-  // in EnableLanguagesFromGenerator
   std::map<std::string, bool> IgnoreExtensions;
-  std::set<std::string> LanguagesReady; // Ready for try_compile
+  std::set<std::string> LanguagesReadyForTryCompile;
   std::set<std::string> LanguagesInProgress;
   std::map<std::string, std::string> OutputExtensions;
   std::map<std::string, std::string> LanguageToOutputExtension;
@@ -932,6 +987,13 @@ private:
   // Store computed inter-target dependencies.
   using TargetDependMap = std::map<cmGeneratorTarget const*, TargetDependSet>;
   TargetDependMap TargetDependencies;
+
+  // Map from a custom-command primary output (collapsed full path) to the
+  // build-system target(s) that produce it.  Built lazily on first use and
+  // cleared with the other generator members.
+  std::map<std::string, std::vector<cmGeneratorTarget*>> OutputOwnerIndex;
+  bool OutputOwnerIndexComputed = false;
+  void ComputeOutputOwnerIndex();
 
   friend class cmake;
   void CreateGeneratorTargets(

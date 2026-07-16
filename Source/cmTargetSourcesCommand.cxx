@@ -2,7 +2,6 @@
    file LICENSE.rst or https://cmake.org/licensing for details.  */
 #include "cmTargetSourcesCommand.h"
 
-#include <sstream>
 #include <utility>
 
 #include <cm/optional>
@@ -11,7 +10,6 @@
 
 #include "cmArgumentParser.h"
 #include "cmArgumentParserTypes.h"
-#include "cmDiagnostics.h"
 #include "cmFileSet.h"
 #include "cmFileSetMetadata.h"
 #include "cmGeneratorExpression.h"
@@ -20,11 +18,11 @@
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmPolicies.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
 #include "cmTargetPropCommandBase.h"
+#include "cmTargetTypes.h"
 
 namespace {
 
@@ -157,40 +155,30 @@ std::vector<std::string> TargetSourcesImpl::ConvertToAbsoluteContent(
     return content;
   }
 
-  bool issueMessage = true;
-  bool useAbsoluteContent = false;
-  std::ostringstream e;
   if (checkCmp0076 == CheckCMP0076::Yes) {
     switch (this->Makefile->GetPolicyStatus(cmPolicies::CMP0076)) {
       case cmPolicies::WARN:
-        e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0076) << "\n";
-        break;
+        if (isInterfaceContent == IsInterface::Yes) {
+          this->Makefile->IssuePolicyWarning(
+            cmPolicies::CMP0076, {},
+            cmStrCat("An interface source of target \""_s, tgt->GetName(),
+                     "\" has a relative path."_s));
+        } else {
+          this->Makefile->IssuePolicyWarning(
+            cmPolicies::CMP0076, {},
+            cmStrCat("A private source from a directory "
+                     "other than that of target \""_s,
+                     tgt->GetName(), "\" has a relative path."_s));
+        }
+        CM_FALLTHROUGH;
       case cmPolicies::OLD:
-        issueMessage = false;
+        return content;
+      case cmPolicies::NEW:
         break;
-      case cmPolicies::NEW: {
-        issueMessage = false;
-        useAbsoluteContent = true;
-        break;
-      }
     }
-  } else {
-    issueMessage = false;
-    useAbsoluteContent = true;
   }
 
-  if (issueMessage) {
-    if (isInterfaceContent == IsInterface::Yes) {
-      e << "An interface source of target \"" << tgt->GetName()
-        << "\" has a relative path.";
-    } else {
-      e << "A private source from a directory other than that of target \""
-        << tgt->GetName() << "\" has a relative path.";
-    }
-    this->Makefile->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e.str());
-  }
-
-  return useAbsoluteContent ? absoluteContent : content;
+  return absoluteContent;
 }
 
 bool TargetSourcesImpl::HandleFileSetMode(
@@ -225,7 +213,7 @@ bool TargetSourcesImpl::HandleOneFileSet(
     return false;
   }
 
-  if (this->Target->GetType() == cmStateEnums::UTILITY) {
+  if (this->Target->GetType() == cm::TargetType::UTILITY) {
     this->SetError("FILE_SETs may not be added to custom targets");
     return false;
   }
@@ -282,7 +270,7 @@ bool TargetSourcesImpl::HandleOneFileSet(
     }
 
     if (cm::FileSetMetadata::VisibilityIsForSelf(visibility) &&
-        this->Target->GetType() == cmStateEnums::INTERFACE_LIBRARY &&
+        this->Target->GetType() == cm::TargetType::INTERFACE_LIBRARY &&
         !this->Target->IsImported()) {
       if (type == cm::FileSetMetadata::CXX_MODULES) {
         this->SetError(
@@ -307,7 +295,7 @@ bool TargetSourcesImpl::HandleOneFileSet(
     }
 
     if (cm::FileSetMetadata::VisibilityIsForSelf(visibility) &&
-        this->Target->GetType() == cmStateEnums::INTERFACE_LIBRARY &&
+        this->Target->GetType() == cm::TargetType::INTERFACE_LIBRARY &&
         type == cm::FileSetMetadata::SOURCES) {
       this->SetError(
         cmStrCat(R"(File set TYPE ")", cm::FileSetMetadata::SOURCES,

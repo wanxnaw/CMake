@@ -61,7 +61,7 @@ if("@HAVE_LIBZ@")
 endif()
 
 set(_curl_cmake_module_path_save ${CMAKE_MODULE_PATH})
-list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR})
+list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_CURRENT_LIST_DIR})
 
 set(_curl_libs "")
 
@@ -122,7 +122,7 @@ if("@USE_NGHTTP3@")
   list(APPEND _curl_libs CURL::nghttp3)
 endif()
 if("@USE_NGTCP2@")
-  find_dependency(NGTCP2 MODULE)
+  find_dependency(NGTCP2 MODULE COMPONENTS "@NGTCP2_CRYPTO_BACKEND@")
   list(APPEND _curl_libs CURL::ngtcp2)
 endif()
 if("@USE_GNUTLS@")

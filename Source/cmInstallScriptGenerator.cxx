@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "cmDiagnostics.h"
+#include "cmDiagnosticContext.h"
 #include "cmGeneratorExpression.h"
 #include "cmLocalGenerator.h"
 #include "cmPolicies.h"
@@ -17,7 +17,7 @@ cmInstallScriptGenerator::cmInstallScriptGenerator(
   bool excludeFromAll, bool allComponents, cmListFileBacktrace backtrace)
   : cmInstallGenerator("", std::vector<std::string>(), component,
                        MessageDefault, excludeFromAll, allComponents,
-                       std::move(backtrace))
+                       cmDiagnosticContext{ std::move(backtrace) })
   , Script(std::move(script))
   , Code(code)
 {
@@ -36,9 +36,7 @@ bool cmInstallScriptGenerator::Compute(cmLocalGenerator* lg)
   if (this->ActionsPerConfig) {
     switch (this->LocalGenerator->GetPolicyStatus(cmPolicies::CMP0087)) {
       case cmPolicies::WARN:
-        this->LocalGenerator->IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmPolicies::GetPolicyWarning(cmPolicies::CMP0087));
+        this->LocalGenerator->IssuePolicyWarning(cmPolicies::CMP0087);
         CM_FALLTHROUGH;
       case cmPolicies::OLD:
         break;

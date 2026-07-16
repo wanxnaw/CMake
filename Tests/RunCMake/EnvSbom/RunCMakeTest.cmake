@@ -2,10 +2,19 @@ include(RunCMake)
 
 set(common_test_options
   -Wno-author
-  "-DCMAKE_EXPERIMENTAL_GENERATE_SBOM:STRING=ca494ed3-b261-4205-a01f-603c95e4cae0"
+  "-DCMAKE_EXPERIMENTAL_GENERATE_SBOM:STRING=248471c2-d905-4c9e-81b5-b89cd27965e1"
   "-DCMAKE_INSTALL_SBOM_FORMATS:STRING=JSON"
   "-DCMAKE_INSTALL_LIBDIR=lib"
 )
+
+function(run_cmake_error test)
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/${test}-build)
+  set(RunCMake_TEST_OPTIONS ${common_test_options})
+  if(NOT RunCMake_GENERATOR_IS_MULTI_CONFIG)
+    list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_BUILD_TYPE=Debug)
+  endif()
+  run_cmake(${test})
+endfunction()
 
 function(run_cmake_install test)
   set(extra_options ${ARGN})
@@ -14,19 +23,35 @@ function(run_cmake_install test)
   set(RunCMake_TEST_OPTIONS ${common_test_options} ${extra_options})
   list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_INSTALL_PREFIX=${RunCMake_TEST_INSTALL_DIR})
   if(NOT RunCMake_GENERATOR_IS_MULTI_CONFIG)
-    list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_BUILD_TYPE=DEBUG)
+    list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_BUILD_TYPE=Debug)
   endif()
 
   run_cmake(${test})
   set(RunCMake_TEST_NO_CLEAN TRUE)
+  set(RunCMake_TEST_OUTPUT_MERGE 1)
   run_cmake_command(${test}-build ${CMAKE_COMMAND} --build . --config Debug)
+  unset(RunCMake_TEST_OUTPUT_MERGE)
   run_cmake_command(${test}-install ${CMAKE_COMMAND} --install . --config Debug)
 endfunction()
+
+function(run_cmake_configure test)
+  set(extra_options ${ARGN})
+  set(RunCMake_TEST_BINARY_DIR ${RunCMake_BINARY_DIR}/${test}-build)
+  set(RunCMake_TEST_OPTIONS ${common_test_options} ${extra_options})
+  run_cmake(${test})
+endfunction()
+
 
 run_cmake_install(ApplicationTarget)
 run_cmake_install(InterfaceTarget)
 run_cmake_install(SharedTarget)
 
 run_cmake_install(MissingPackageNamespace)
-run_cmake_install(ReferencesNonExportedTarget)
 run_cmake_install(ProjectMetadata)
+run_cmake_install(PartialCoverage)
+
+run_cmake_error(ReferencesNonExportedTarget)
+
+run_cmake_configure(Config)
+run_cmake_configure(Genex)
+run_cmake_configure(ForbiddenGenex)

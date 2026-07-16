@@ -51,11 +51,11 @@
 #include "cmRulePlaceholderExpander.h"
 #include "cmSourceFile.h"
 #include "cmState.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
 #include "cmTargetDepend.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 #include "cmake.h"
 
@@ -63,21 +63,21 @@ std::unique_ptr<cmNinjaTargetGenerator> cmNinjaTargetGenerator::New(
   cmGeneratorTarget* target)
 {
   switch (target->GetType()) {
-    case cmStateEnums::EXECUTABLE:
-    case cmStateEnums::SHARED_LIBRARY:
-    case cmStateEnums::STATIC_LIBRARY:
-    case cmStateEnums::MODULE_LIBRARY:
-    case cmStateEnums::OBJECT_LIBRARY:
+    case cm::TargetType::EXECUTABLE:
+    case cm::TargetType::SHARED_LIBRARY:
+    case cm::TargetType::STATIC_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
+    case cm::TargetType::OBJECT_LIBRARY:
       return cm::make_unique<cmNinjaNormalTargetGenerator>(target);
 
-    case cmStateEnums::INTERFACE_LIBRARY:
+    case cm::TargetType::INTERFACE_LIBRARY:
       if (target->HaveCxx20ModuleSources()) {
         return cm::make_unique<cmNinjaNormalTargetGenerator>(target);
       }
       CM_FALLTHROUGH;
 
-    case cmStateEnums::UTILITY:
-    case cmStateEnums::GLOBAL_TARGET:
+    case cm::TargetType::UTILITY:
+    case cm::TargetType::GLOBAL_TARGET:
       return cm::make_unique<cmNinjaUtilityTargetGenerator>(target);
 
     default:
@@ -249,9 +249,11 @@ std::string cmNinjaTargetGenerator::ComputeFlagsForObject(
       flags, genexInterpreter.Evaluate(*coptions, COMPILE_OPTIONS));
   }
 
-  if (auto const* fileSet =
-        this->GeneratorTarget->GetGeneratorFileSets()->GetFileSetForSource(
-          config, source)) {
+  auto const* const fileSet =
+    this->GeneratorTarget->GetGeneratorFileSets()->GetFileSetForSource(config,
+                                                                       source);
+
+  if (fileSet) {
     auto options = fileSet->BelongsTo(this->GeneratorTarget)
       ? fileSet->GetCompileOptions(config, language)
       : fileSet->GetInterfaceCompileOptions(config, language);
@@ -262,7 +264,9 @@ std::string cmNinjaTargetGenerator::ComputeFlagsForObject(
   }
 
   // Add precompile headers compile options.
-  if (!pchSources.empty() && !source->GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        source->GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     std::string pchOptions;
     auto pchIt = pchSources.find(source->GetFullPath());
     if (pchIt != pchSources.end()) {
@@ -277,14 +281,13 @@ std::string cmNinjaTargetGenerator::ComputeFlagsForObject(
       flags, genexInterpreter.Evaluate(pchOptions, COMPILE_OPTIONS));
   }
 
-  auto const* fs = this->GeneratorTarget->GetFileSetForSource(config, source);
-  if (fs && fs->GetType() == cm::FileSetMetadata::CXX_MODULES) {
+  if (fileSet && fileSet->GetType() == cm::FileSetMetadata::CXX_MODULES) {
     if (source->GetLanguage() != "CXX"_s) {
       this->GetMakefile()->IssueMessage(
         MessageType::FATAL_ERROR,
         cmStrCat("Target \"", this->GeneratorTarget->Target->GetName(),
                  "\" contains the source\n  ", source->GetFullPath(),
-                 "\nin a file set of type \"", fs->GetType(),
+                 "\nin a file set of type \"", fileSet->GetType(),
                  R"(" but the source is not classified as a "CXX" source.)"));
     }
 
@@ -413,8 +416,8 @@ cmNinjaDeps cmNinjaTargetGenerator::ComputeLinkDeps(
 {
   // Static libraries never depend on other targets for linking.
   if (!ignoreType &&
-      (this->GeneratorTarget->GetType() == cmStateEnums::STATIC_LIBRARY ||
-       this->GeneratorTarget->GetType() == cmStateEnums::OBJECT_LIBRARY)) {
+      (this->GeneratorTarget->GetType() == cm::TargetType::STATIC_LIBRARY ||
+       this->GeneratorTarget->GetType() == cm::TargetType::OBJECT_LIBRARY)) {
     return cmNinjaDeps();
   }
 
@@ -580,15 +583,22 @@ bool cmNinjaTargetGenerator::SetMsvcTargetPdbVariable(
   cmNinjaVars& vars, std::string const& config) const
 {
   cmMakefile* mf = this->GetMakefile();
-  if (mf->GetDefinition("MSVC_C_ARCHITECTURE_ID") ||
-      mf->GetDefinition("MSVC_CXX_ARCHITECTURE_ID") ||
-      mf->GetDefinition("MSVC_CUDA_ARCHITECTURE_ID")) {
+  bool supportsPDB = mf->GetDefinition("MSVC_C_ARCHITECTURE_ID") ||
+    mf->GetDefinition("MSVC_CXX_ARCHITECTURE_ID") ||
+    mf->GetDefinition("MSVC_CUDA_ARCHITECTURE_ID");
+  if (!supportsPDB) {
+    std::string const linkLanguage =
+      this->GeneratorTarget->GetLinkerLanguage(config);
+    supportsPDB =
+      mf->IsOn(cmStrCat("CMAKE_", linkLanguage, "_LINKER_SUPPORTS_PDB"));
+  }
+  if (supportsPDB) {
     std::string pdbPath;
     std::string compilePdbPath = this->ComputeTargetCompilePDB(config);
-    if (this->GeneratorTarget->GetType() == cmStateEnums::EXECUTABLE ||
-        this->GeneratorTarget->GetType() == cmStateEnums::STATIC_LIBRARY ||
-        this->GeneratorTarget->GetType() == cmStateEnums::SHARED_LIBRARY ||
-        this->GeneratorTarget->GetType() == cmStateEnums::MODULE_LIBRARY) {
+    if (this->GeneratorTarget->GetType() == cm::TargetType::EXECUTABLE ||
+        this->GeneratorTarget->GetType() == cm::TargetType::STATIC_LIBRARY ||
+        this->GeneratorTarget->GetType() == cm::TargetType::SHARED_LIBRARY ||
+        this->GeneratorTarget->GetType() == cm::TargetType::MODULE_LIBRARY) {
       pdbPath = cmStrCat(this->GeneratorTarget->GetPDBDirectory(config), '/',
                          this->GeneratorTarget->GetPDBName(config));
     }
@@ -715,6 +725,7 @@ cmList ExpandRuleCommands(std::string const& command,
                           cmRulePlaceholderExpander::RuleVariables const& vars,
                           cmMakefile const* mf, std::string const& lang,
                           std::string const& launcher,
+                          std::string const& cldeps,
                           cmLocalGenerator* localGenerator,
                           cmRulePlaceholderExpander* rulePlaceholderExpander)
 {
@@ -724,6 +735,9 @@ cmList ExpandRuleCommands(std::string const& command,
   if (!commands.empty()) {
     commands.front().insert(0, "${CODE_CHECK}");
     commands.front().insert(0, "${LAUNCHER}");
+  }
+  if (!commands.empty()) {
+    commands.front().insert(0, cldeps);
   }
   if (!extraCommands.empty()) {
     commands.append(extraCommands);
@@ -1028,12 +1042,8 @@ void cmNinjaTargetGenerator::WriteCompileRule(std::string const& lang,
   std::string const cmdVar = this->GetCompileTemplateVar(lang);
   std::string const& compileCmd = mf->GetRequiredDefinition(cmdVar);
   cmList compileCmds = ExpandRuleCommands(compileCmd, vars, mf, lang, launcher,
-                                          this->GetLocalGenerator(),
+                                          cldeps, this->GetLocalGenerator(),
                                           rulePlaceholderExpander.get());
-
-  if (!compileCmds.empty()) {
-    compileCmds.front().insert(0, cldeps);
-  }
 
   rule.Command =
     this->GetLocalGenerator()->BuildCommandLine(compileCmds, config, config);
@@ -1066,8 +1076,8 @@ void cmNinjaTargetGenerator::WriteCompileRule(std::string const& lang,
       emitModRule.Restat = "1";
 
       cmList emitModCmds = ExpandRuleCommands(
-        *emitModCmdVal, emVars, mf, lang, launcher, this->GetLocalGenerator(),
-        rulePlaceholderExpander.get());
+        *emitModCmdVal, emVars, mf, lang, launcher, cldeps,
+        this->GetLocalGenerator(), rulePlaceholderExpander.get());
       emitModRule.Command = this->GetLocalGenerator()->BuildCommandLine(
         emitModCmds, config, config);
       emitModRule.Comment = "Rule for emitting Swift .swiftmodule files.";
@@ -1671,7 +1681,9 @@ void cmNinjaTargetGenerator::WriteObjectBuildStatement(
     }
   }
 
-  if (!pchSources.empty() && !source->GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        source->GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     for (std::string const& arch : pchArchs) {
       depList.push_back(
         this->GeneratorTarget->GetPchHeader(config, language, arch));
@@ -1825,7 +1837,9 @@ void cmNinjaTargetGenerator::WriteObjectBuildStatement(
   this->addPoolNinjaVariable("JOB_POOL_COMPILE", config,
                              this->GetGeneratorTarget(), source, vars);
 
-  if (!pchSources.empty() && !source->GetProperty("SKIP_PRECOMPILE_HEADERS")) {
+  if (!pchSources.empty() &&
+      !((fileSet && fileSet->GetProperty("SKIP_PRECOMPILE_HEADERS")) ||
+        source->GetProperty("SKIP_PRECOMPILE_HEADERS"))) {
     auto pchIt = pchSources.find(source->GetFullPath());
     if (pchIt != pchSources.end()) {
       this->addPoolNinjaVariable("JOB_POOL_PRECOMPILE_HEADER", config,
@@ -2154,7 +2168,7 @@ void cmNinjaTargetGenerator::WriteSwiftObjectBuildStatement(
   auto isImportableTarget = [](cmGeneratorTarget const& tgt) -> bool {
     // Everything except for executables that don't export anything should emit
     // some way to import them.
-    if (tgt.GetType() == cmStateEnums::EXECUTABLE) {
+    if (tgt.GetType() == cm::TargetType::EXECUTABLE) {
       return tgt.IsExecutableWithExports();
     }
     return true;
@@ -2177,20 +2191,20 @@ void cmNinjaTargetGenerator::WriteSwiftObjectBuildStatement(
   }();
 
   // Build flags common to both compile and emit-module edges.
-  if (target.GetType() != cmStateEnums::EXECUTABLE) {
+  if (target.GetType() != cm::TargetType::EXECUTABLE) {
     // Without `-emit-library` or `-emit-executable`, targets with a single
     // source file parse as a Swift script instead of like normal source. For
     // non-executable targets, append this to ensure that they are parsed like
     // a normal source.
     this->LocalGenerator->AppendFlags(vars["FLAGS"], "-parse-as-library");
   }
-  if (target.GetType() == cmStateEnums::STATIC_LIBRARY) {
+  if (target.GetType() == cm::TargetType::STATIC_LIBRARY) {
     this->LocalGenerator->AppendFlags(vars["FLAGS"], "-static");
   }
   this->LocalGenerator->AppendFlags(vars["FLAGS"],
                                     cmStrCat("-module-name ", moduleName));
 
-  if (target.GetType() != cmStateEnums::EXECUTABLE) {
+  if (target.GetType() != cm::TargetType::EXECUTABLE) {
     std::string const libraryLinkNameFlag = "-module-link-name";
     std::string const libraryLinkName =
       this->GetGeneratorTarget()->GetLibraryNames(config).Base;
@@ -2362,6 +2376,8 @@ void cmNinjaTargetGenerator::WriteTargetDependInfo(std::string const& lang,
       this->Makefile->GetSafeDefinition("CMAKE_Fortran_SUBMODULE_SEP");
     tdi["submodule-ext"] =
       this->Makefile->GetSafeDefinition("CMAKE_Fortran_SUBMODULE_EXT");
+    tdi["building-intrinsic-modules"] =
+      this->GeneratorTarget->IsFortranBuildingIntrinsicModules();
   } else if (lang == "CXX") {
     // No extra information necessary.
   }

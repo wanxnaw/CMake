@@ -185,6 +185,7 @@ if(WIN32)
   add_RunCMake_test(CMP0212)
 endif()
 add_RunCMake_test(CMP0217)
+add_RunCMake_test(CMP0219)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
   add_RunCMake_test(CMP0194 -DCMAKE_C_COMPILER_VERSION=${CMAKE_C_COMPILER_VERSION})
@@ -278,6 +279,7 @@ if(CMAKE_GENERATOR MATCHES "Ninja")
 endif()
 add_RunCMake_test(InstallParallel)
 add_RunCMake_test(CTest)
+add_RunCMake_test(CTestLaunch)
 
 if(NOT CMake_TEST_EXTERNAL_CMAKE)
   add_RunCMake_test(ctest_memcheck
@@ -436,10 +438,25 @@ endif()
 add_RunCMake_test(FileAPI -DPython_EXECUTABLE=${Python_EXECUTABLE}
                           -DCMAKE_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
                           -DCMAKE_CXX_SIMULATE_ID=${CMAKE_CXX_SIMULATE_ID}
-                          -DCMake_TEST_JSON_SCHEMA=${CMake_TEST_JSON_SCHEMA})
+                          -DCMake_TEST_JSON_SCHEMA=${CMake_TEST_JSON_SCHEMA}
+                          -DCMake_TEST_MODULE_COMPILATION=${CMake_TEST_MODULE_COMPILATION}
+                          -DCMake_TEST_MODULE_COMPILATION_RULES=${CMake_TEST_MODULE_COMPILATION_RULES}
+                          -DCMake_TEST_CXX_STDLIB_MODULES_JSON=${CMake_TEST_CXX_STDLIB_MODULES_JSON})
 if(CMAKE_GENERATOR MATCHES "Make|Ninja|FASTBuild")
   add_RunCMake_test(Instrumentation -DPython_EXECUTABLE=${Python_EXECUTABLE}
+                                    -DCMAKE_C_COMPILER_ID=${CMAKE_C_COMPILER_ID}
+                                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+                                    -DCMAKE_C_COMPILER_VERSION=${CMAKE_C_COMPILER_VERSION}
+                                    -DCMAKE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
                                     -DCMake_TEST_JSON_SCHEMA=${CMake_TEST_JSON_SCHEMA})
+  # The real-signal/console-event interrupt case runs in its own suite so it can
+  # be excluded from MemCheck (the interrupted cmake is killed by a real signal)
+  # without dropping leak coverage for the rest of the instrumentation tests.
+  add_RunCMake_test(InstrumentationInterrupt TEST_DIR Instrumentation
+                                    -DINSTRUMENTATION_INTERRUPT_REAL=1
+                                    -DCMAKE_C_COMPILER_ID=${CMAKE_C_COMPILER_ID}
+                                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+                                    -DCMAKE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX})
 endif()
 add_RunCMake_test(ConfigDir)
 if(CMake_TEST_FindPython2)
@@ -621,6 +638,7 @@ add_RunCMake_test(ScriptMode)
 add_RunCMake_test(StandardLinkDirectories)
 add_RunCMake_test(Swift -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
                         -DCMake_TEST_Swift=${CMake_TEST_Swift}
+                        -DCMAKE_Swift_COMPILER_VERSION=${CMAKE_Swift_COMPILER_VERSION}
                         -DXCODE_VERSION=${XCODE_VERSION})
 add_RunCMake_test(TargetArtifacts -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME})
 add_RunCMake_test(TargetObjects)
@@ -630,6 +648,11 @@ add_RunCMake_test(FileSet-SOURCES -DCMAKE_C_COMPILER_ID=${CMAKE_C_COMPILER_ID}
                                   -DCMAKE_C_OUTPUT_EXTENSION=${CMAKE_C_OUTPUT_EXTENSION}
                                   -DMSVC_VERSION=${MSVC_VERSION})
 add_RunCMake_test(ToolchainFile)
+add_RunCMake_test(ToolchainSkipsChecks
+  -DCMAKE_C_COMPILER_ID=${CMAKE_C_COMPILER_ID}
+  -DCMAKE_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
+  -DCMAKE_Fortran_COMPILER_ID=${CMAKE_Fortran_COMPILER_ID}
+)
 
 if(NOT CMake_TEST_EXTERNAL_CMAKE)
   set(Tutorial_ARGS TEST_DIR Tutorial -DTutorial_SOURCE_DIR=${CMake_SOURCE_DIR}/Help/guide/tutorial)
@@ -772,7 +795,8 @@ add_RunCMake_test(file-RPATH
 add_RunCMake_test(file-STRINGS)
 add_RunCMake_test(find_file -DMINGW=${MINGW})
 add_RunCMake_test(find_library -DMINGW=${MINGW} -DCYGWIN=${CYGWIN} -DMSYS=${MSYS} -DMSVC=${MSVC})
-add_RunCMake_test(find_package -DMINGW=${MINGW} -DMSYS=${MSYS})
+add_RunCMake_test(find_package -DMINGW=${MINGW} -DMSYS=${MSYS}
+  -DCMake_TEST_FILESYSTEM_CASE=${CMake_TEST_FILESYSTEM_CASE})
 add_RunCMake_test(find_package-CPS)
 add_RunCMake_test(find_path -DMINGW=${MINGW})
 add_RunCMake_test(find_program -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME})
@@ -787,7 +811,7 @@ endif()
 add_RunCMake_test(INSTALL_OBJECT_NAME_STRATEGY)
 add_RunCMake_test(INSTALL_OBJECT_ONLY_USE_DESTINATION)
 add_RunCMake_test(if -DMSYS=${MSYS})
-add_RunCMake_test(include)
+add_RunCMake_test(include -DCMake_TEST_FILESYSTEM_CASE=${CMake_TEST_FILESYSTEM_CASE})
 add_RunCMake_test(include_directories)
 add_RunCMake_test(include_guard)
 add_RunCMake_test(list)
@@ -858,6 +882,7 @@ add_RunCMake_test(alias_targets)
 add_RunCMake_test(InterfaceLibrary)
 add_RunCMake_test(IntermediateDirStrategy)
 add_RunCMake_test(no_install_prefix)
+add_RunCMake_test(SourceGroup)
 add_RunCMake_test(configure_file)
 if(CTestTestTimeout_TIME)
   set(CTestTimeout_ARGS -DTIMEOUT=${CTestTestTimeout_TIME})
@@ -882,13 +907,22 @@ set_property(TEST RunCMake.DependencyGraph APPEND PROPERTY LABELS "Fortran")
 add_RunCMake_test(CXXModules
   -DCMake_TEST_CXX_STDLIB_MODULES_JSON=${CMake_TEST_CXX_STDLIB_MODULES_JSON}
 )
-add_RunCMake_test(CXXModulesCompile
-  -DCMake_TEST_MODULE_COMPILATION=${CMake_TEST_MODULE_COMPILATION}
-  -DCMake_TEST_MODULE_COMPILATION_RULES=${CMake_TEST_MODULE_COMPILATION_RULES}
-  -DCMake_TEST_CXX_STDLIB_MODULES_JSON=${CMake_TEST_CXX_STDLIB_MODULES_JSON}
-)
-set_property(TEST RunCMake.CXXModules RunCMake.CXXModulesCompile APPEND
+set_property(TEST RunCMake.CXXModules APPEND
   PROPERTY LABELS "CXXModules")
+function (add_RunCMake_CXXModulesCompile_test variant)
+  add_RunCMake_test(CXXModulesCompile${variant}
+    TEST_DIR CXXModulesCompile
+    -DCMake_TEST_MODULE_VARIANT=${variant}
+    -DCMake_TEST_MODULE_COMPILATION=${CMake_TEST_MODULE_COMPILATION}
+    -DCMake_TEST_MODULE_COMPILATION_RULES=${CMake_TEST_MODULE_COMPILATION_RULES}
+    -DCMake_TEST_CXX_STDLIB_MODULES_JSON=${CMake_TEST_CXX_STDLIB_MODULES_JSON}
+  )
+  set_property(TEST RunCMake.CXXModulesCompile${variant} APPEND
+    PROPERTY LABELS "CXXModules")
+endfunction ()
+add_RunCMake_CXXModulesCompile_test(BuildBehavior)
+add_RunCMake_CXXModulesCompile_test(BuildImportExport)
+add_RunCMake_CXXModulesCompile_test(Install)
 
 # ctresalloc links against CMakeLib and CTestLib, which means it can't be built
 # if CMake_TEST_EXTERNAL_CMAKE is activated (the compiler might be different.)
@@ -1123,11 +1157,20 @@ add_RunCMake_test(CommandLine -DLLVM_RC=$<TARGET_FILE:pseudo_llvm-rc> -DCMAKE_SY
                   -DCMake_TEST_JSON_SCHEMA=${CMake_TEST_JSON_SCHEMA}
                   -DEXIT_CODE_EXE=$<TARGET_FILE:exit_code>
                   -DPRINT_STDIN_EXE=$<TARGET_FILE:print_stdin>)
+
+if(NOT DEFINED CMake_TEST_LibLZMA_ARM64_BCJ)
+  if(NOT CMake_TEST_EXTERNAL_CMAKE AND NOT CMAKE_USE_SYSTEM_LIBARCHIVE AND NOT CMAKE_USE_SYSTEM_LIBLZMA)
+    set(CMake_TEST_LibLZMA_ARM64_BCJ 1)
+  endif()
+endif()
 if(CMake_TEST_LibArchive_VERSION)
   list(APPEND CommandLineTar_ARGS -DCMake_TEST_LibArchive_VERSION=${CMake_TEST_LibArchive_VERSION})
 endif()
 if(DEFINED CMake_TEST_LOCALE_CHARSET)
   list(APPEND CommandLineTar_ARGS -DCMake_TEST_LOCALE_CHARSET=${CMake_TEST_LOCALE_CHARSET})
+endif()
+if(DEFINED CMake_TEST_LibLZMA_ARM64_BCJ)
+  list(APPEND CommandLineTar_ARGS -DCMake_TEST_LibLZMA_ARM64_BCJ=${CMake_TEST_LibLZMA_ARM64_BCJ})
 endif()
 list(APPEND CommandLineTar_ARGS -DPython_EXECUTABLE=${Python_EXECUTABLE})
 add_RunCMake_test(CommandLineTar)
@@ -1138,16 +1181,26 @@ else()
   set(NO_NAMELINK 0)
 endif()
 
-add_RunCMake_test(install -DNO_NAMELINK=${NO_NAMELINK} -DCYGWIN=${CYGWIN} -DMSYS=${MSYS}
-  -DCMAKE_SHARED_LIBRARY_RPATH_ORIGIN_TOKEN=${CMAKE_SHARED_LIBRARY_RPATH_ORIGIN_TOKEN}
-  -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-  -DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}
-  -DCMAKE_SHARED_LIBRARY_RUNTIME_C_FLAG=${CMAKE_SHARED_LIBRARY_RUNTIME_C_FLAG}
-  -DCMAKE_EXECUTABLE_FORMAT=${CMAKE_EXECUTABLE_FORMAT}
-  -DCMake_TEST_ISPC=${CMake_TEST_ISPC}
+function (add_RunCMake_install_test variant)
+  add_RunCMake_test(install-${variant}
+    TEST_DIR install
+    -DNO_NAMELINK=${NO_NAMELINK}
+    -DCYGWIN=${CYGWIN}
+    -DMSYS=${MSYS}
+    -DCMAKE_SHARED_LIBRARY_RPATH_ORIGIN_TOKEN=${CMAKE_SHARED_LIBRARY_RPATH_ORIGIN_TOKEN}
+    -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
+    -DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}
+    -DCMAKE_SHARED_LIBRARY_RUNTIME_C_FLAG=${CMAKE_SHARED_LIBRARY_RUNTIME_C_FLAG}
+    -DCMAKE_EXECUTABLE_FORMAT=${CMAKE_EXECUTABLE_FORMAT}
+    -DCMake_TEST_ISPC=${CMake_TEST_ISPC}
+    -DCMake_TEST_install_VARIANT=${variant}
   )
-set_property(TEST RunCMake.install APPEND
-  PROPERTY LABELS "ISPC")
+  set_property(TEST RunCMake.install-${variant} APPEND
+    PROPERTY LABELS "ISPC")
+endfunction ()
+add_RunCMake_install_test(Files)
+add_RunCMake_install_test(Targets)
+add_RunCMake_install_test(Exports)
 
 if(DEFINED CMake_COMPILER_FORCES_NEW_DTAGS)
   list(APPEND file-GET_RUNTIME_DEPENDENCIES_ARGS
@@ -1173,6 +1226,9 @@ if(CMake_TEST_RunCMake_ExternalProject_RUN_SERIAL)
 endif()
 add_RunCMake_test(FetchContent)
 add_RunCMake_test(FetchContent_find_package)
+if(CMake_TEST_CLANG_COVERAGE)
+  add_RunCMake_test(CTestCoverage -DCMake_TEST_CLANG_COVERAGE=${CMake_TEST_CLANG_COVERAGE})
+endif()
 set(CTestCommandLine_ARGS
   -DPython_EXECUTABLE=${Python_EXECUTABLE}
   -DCMake_TEST_JSON_SCHEMA=${CMake_TEST_JSON_SCHEMA}
@@ -1183,6 +1239,9 @@ endif()
 add_executable(print_stdin print_stdin.c)
 add_RunCMake_test(CTestCommandLine -DTEST_PRINT_STDIN=$<TARGET_FILE:print_stdin>)
 add_RunCMake_test(CacheNewline)
+add_RunCMake_test(CacheVarHelpFallback)
+add_RunCMake_test(CacheVarHelpCoverage
+  -DCMake_SOURCE_DIR=${CMake_SOURCE_DIR})
 # Only run this test on unix platforms that support
 # symbolic links
 if(UNIX)

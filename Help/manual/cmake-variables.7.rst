@@ -143,6 +143,7 @@ Variables that Provide Information
    /variable/CMAKE_Swift_MODULE_DIRECTORY
    /variable/CMAKE_Swift_NUM_THREADS
    /variable/CMAKE_Swift_SEPARATE_MODULE_EMISSION
+   /variable/CMAKE_TEST_BUILD_DEPENDS
    /variable/CMAKE_TEST_LAUNCHER
    /variable/CMAKE_TOOLCHAIN_FILE
    /variable/CMAKE_TWEAK_VERSION
@@ -738,12 +739,14 @@ Variables for CTest
    /variable/CTEST_BINARY_DIRECTORY
    /variable/CTEST_BUILD_COMMAND
    /variable/CTEST_BUILD_NAME
+   /variable/CTEST_BUILD_PRESET
    /variable/CTEST_BZR_COMMAND
    /variable/CTEST_BZR_UPDATE_OPTIONS
    /variable/CTEST_CHANGE_ID
    /variable/CTEST_CHECKOUT_COMMAND
    /variable/CTEST_CONFIGURATION_TYPE
    /variable/CTEST_CONFIGURE_COMMAND
+   /variable/CTEST_CONFIGURE_PRESET
    /variable/CTEST_COVERAGE_COMMAND
    /variable/CTEST_COVERAGE_EXTRA_FLAGS
    /variable/CTEST_CUSTOM_COVERAGE_EXCLUDE
@@ -792,17 +795,21 @@ Variables for CTest
    /variable/CTEST_P4_COMMAND
    /variable/CTEST_P4_OPTIONS
    /variable/CTEST_P4_UPDATE_OPTIONS
+   /variable/CTEST_PRESET
+   /variable/CTEST_PRESETS_FILE
    /variable/CTEST_RESOURCE_SPEC_FILE
    /variable/CTEST_RUN_CURRENT_SCRIPT
    /variable/CTEST_SCRIPT_DIRECTORY
    /variable/CTEST_SITE
    /variable/CTEST_SOURCE_DIRECTORY
    /variable/CTEST_SUBMIT_INACTIVITY_TIMEOUT
+   /variable/CTEST_SUBMIT_PARTS
    /variable/CTEST_SUBMIT_URL
    /variable/CTEST_SVN_COMMAND
    /variable/CTEST_SVN_OPTIONS
    /variable/CTEST_SVN_UPDATE_OPTIONS
    /variable/CTEST_TEST_LOAD
+   /variable/CTEST_TEST_PRESET
    /variable/CTEST_TEST_TIMEOUT
    /variable/CTEST_TEST_COVERAGE_TOOL
    /variable/CTEST_TLS_VERIFY

@@ -2153,8 +2153,7 @@ function(ExternalProject_Add_StepTargets name)
       )
     endif()
   elseif(cmp0114 STREQUAL "")
-    cmake_policy(GET_WARNING CMP0114 _cmp0114_warning)
-    string(APPEND _cmp0114_warning "\n"
+    string(JOIN "" _cmp0114_warning
       "ExternalProject target '${name}' would depend on the targets for "
       "step(s) '${steps}' under policy CMP0114, but this is being left out "
       "for compatibility since the policy is not set."
@@ -2164,7 +2163,7 @@ function(ExternalProject_Add_StepTargets name)
         "Also, the NO_DEPENDS option is deprecated in favor of policy CMP0114."
       )
     endif()
-    message(AUTHOR_WARNING "${_cmp0114_warning}")
+    cmake_policy(ISSUE_WARNING CMP0114 POST "${_cmp0114_warning}")
   endif()
   foreach(step IN LISTS steps)
     _ep_step_add_target("${name}" "${step}" "${no_deps}")
@@ -2507,14 +2506,11 @@ function(ExternalProject_Add_Step name step)
         set_property(TARGET ${name} PROPERTY
           _EP_CMP0114_WARNED_INDEPENDENT_STEP_TARGETS 1
         )
-        cmake_policy(GET_WARNING CMP0114 _cmp0114_warning)
-        string(APPEND _cmp0114_warning
-          "\n"
+        cmake_policy(ISSUE_WARNING CMP0114 POST
           "ExternalProject '${name}' option INDEPENDENT_STEP_TARGETS is set to"
           "\n  ${independent_step_targets}\n"
           "but the option is deprecated in favor of policy CMP0114."
         )
-        message(AUTHOR_WARNING "${_cmp0114_warning}")
       endif()
     endif()
     foreach(st IN LISTS independent_step_targets)
@@ -2833,7 +2829,8 @@ function(_ep_add_configure_command name)
     PROPERTY _EP_CONFIGURE_ENVIRONMENT_MODIFICATION
   )
   if(environment)
-    set(environment "ENVIRONMENT_MODIFICATION" ${environment})
+    string(JOIN "]==] [==[" environment ${environment})
+    set(environment "ENVIRONMENT_MODIFICATION [==[${environment}]==]")
   endif()
 
   get_property(log
@@ -2952,7 +2949,8 @@ function(_ep_add_build_command name)
     PROPERTY _EP_BUILD_ENVIRONMENT_MODIFICATION
   )
   if(environment)
-    set(environment ENVIRONMENT_MODIFICATION ${environment})
+    string(JOIN "]==] [==[" environment ${environment})
+    set(environment "ENVIRONMENT_MODIFICATION [==[${environment}]==]")
   endif()
 
   set(__cmdQuoted)
@@ -3047,7 +3045,8 @@ function(_ep_add_install_command name)
     PROPERTY _EP_INSTALL_ENVIRONMENT_MODIFICATION
   )
   if(environment)
-    set(environment ENVIRONMENT_MODIFICATION ${environment})
+    string(JOIN "]==] [==[" environment ${environment})
+    set(environment "ENVIRONMENT_MODIFICATION [==[${environment}]==]")
   endif()
 
   set(__cmdQuoted)
@@ -3135,7 +3134,8 @@ function(_ep_add_test_command name)
       PROPERTY _EP_TEST_ENVIRONMENT_MODIFICATION
     )
     if(environment)
-      set(environment ENVIRONMENT_MODIFICATION ${environment})
+      string(JOIN "]==] [==[" environment ${environment})
+      set(environment "ENVIRONMENT_MODIFICATION [==[${environment}]==]")
     endif()
 
     set(__cmdQuoted)

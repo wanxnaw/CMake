@@ -15,8 +15,10 @@
 #include <vector>
 
 #include <cm/optional>
+#include <cm/string_view>
 
 #include "cmCustomCommandTypes.h"
+#include "cmDiagnosticContext.h"
 #include "cmDiagnostics.h"
 #include "cmGeneratorOptions.h"
 #include "cmGeneratorTarget.h"
@@ -49,6 +51,10 @@ class cmake;
 
 template <typename Iter>
 class cmRange;
+
+namespace cm {
+enum class TargetType;
+} // namespace cm
 
 /** Target and source file which have a specific output.  */
 struct cmSourcesWithOutput
@@ -581,10 +587,26 @@ public:
   void IssueDiagnostic(cmDiagnosticCategory category,
                        std::string const& text) const
   {
-    this->IssueDiagnostic(category, text, this->DirectoryBacktrace);
+    this->IssueDiagnostic(category, text,
+                          cmDiagnosticContext{ this->DirectoryBacktrace });
   }
   void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
-                       cmListFileBacktrace const& bt) const;
+                       cmListFileBacktrace const& bt) const
+  {
+    this->IssueDiagnostic(category, text, cmDiagnosticContext{ bt });
+  }
+  void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
+                       cmDiagnosticContext const& context) const;
+  void IssuePolicyWarning(cmPolicies::PolicyID policy, cm::string_view preface,
+                          cm::string_view postface,
+                          cmListFileBacktrace const& bt) const;
+  void IssuePolicyWarning(cmPolicies::PolicyID policy,
+                          cm::string_view preface = {},
+                          cm::string_view postface = {}) const
+  {
+    this->IssuePolicyWarning(policy, preface, postface,
+                             this->DirectoryBacktrace);
+  }
 
   void CreateEvaluationFileOutputs();
   void CreateEvaluationFileOutputs(std::string const& config);
@@ -605,13 +627,11 @@ public:
   std::string CreateSafeObjectFileName(std::string const& sin) const;
 
   /**
-   * Build the search index from source files to source groups
-   */
-  void ComputeSourceGroupSearchIndex();
-
-  /**
    * find what source group this source is in
    */
+  cmSourceGroup* FindSourceGroup(cmGeneratorTarget const* target,
+                                 cmSourceFile const* source,
+                                 std::string const& config);
   cmSourceGroup* FindSourceGroup(std::string const& source);
 
 protected:
@@ -710,7 +730,7 @@ private:
                                cmCommandOrigin origin);
 
   void AddPositionIndependentFlags(std::string& flags, std::string const& l,
-                                   int targetType);
+                                   cm::TargetType targetType);
 
   void ComputeObjectMaxPath();
   bool AllAppleArchSysrootsAreTheSame(std::vector<std::string> const& archs,

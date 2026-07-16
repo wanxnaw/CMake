@@ -5,6 +5,7 @@
 #include "cmMakefile.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,9 @@
 #include "cmsys/RegularExpression.hxx"
 #include "cmsys/String.h"
 
+#ifndef CMAKE_BOOTSTRAP
+#  include "cmBuildSbomGenerator.h"
+#endif
 #include "cmCustomCommand.h"
 #include "cmCustomCommandLines.h"
 #include "cmCustomCommandTypes.h"
@@ -109,6 +113,15 @@ public:
   FileScopeBase(cmMakefile* mf)
     : Makefile(mf)
   {
+#if !defined(CMAKE_BOOTSTRAP)
+    this->Makefile->GetGlobalGenerator()->GetFileLockPool().PushFileScope();
+#endif
+  }
+  ~FileScopeBase()
+  {
+#if !defined(CMAKE_BOOTSTRAP)
+    this->Makefile->GetGlobalGenerator()->GetFileLockPool().PopFileScope();
+#endif
   }
   void PushListFileVars(std::string const& newCurrent)
   {
@@ -227,7 +240,7 @@ void cmMakefile::IssueMessage(MessageType t, std::string const& text,
 
 void cmMakefile::IssueDiagnostic(cmDiagnosticCategory category,
                                  std::string const& text,
-                                 cmListFileBacktrace const& bt) const
+                                 cmDiagnosticContext const& context) const
 {
   if (!this->ExecutionStatusStack.empty()) {
     cmDiagnosticAction const action = this->GetDiagnosticAction(category);
@@ -236,7 +249,24 @@ void cmMakefile::IssueDiagnostic(cmDiagnosticCategory category,
     }
   }
   this->GetCMakeInstance()->IssueDiagnostic(category, text,
-                                            this->GetStateSnapshot(), bt);
+                                            this->GetStateSnapshot(), context);
+}
+
+void cmMakefile::IssuePolicyWarning(cmPolicies::PolicyID policy,
+                                    cm::string_view preface,
+                                    cm::string_view postface,
+                                    cmListFileBacktrace const& bt) const
+{
+  std::string msg = cmPolicies::GetPolicyWarning(policy);
+  if (!preface.empty() && !postface.empty()) {
+    msg = cmStrCat(preface, '\n', msg, '\n', postface);
+  } else if (!preface.empty()) {
+    msg = cmStrCat(preface, '\n', msg);
+  } else if (!postface.empty()) {
+    msg = cmStrCat(msg, '\n', postface);
+  }
+  this->IssueDiagnostic(cmDiagnostics::CMD_POLICY, msg,
+                        cmDiagnosticContext{ bt });
 }
 
 Message::LogLevel cmMakefile::GetCurrentLogLevel() const
@@ -278,7 +308,7 @@ void cmMakefile::MaybeWarnCMP0074(std::string const& rootVar, cmValue rootDef,
 {
   // Warn if a <PackageName>_ROOT variable we may use is set.
   if ((rootDef || rootEnv) && this->WarnedCMP0074.insert(rootVar).second) {
-    auto e = cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0074), '\n');
+    std::string e;
     if (rootDef) {
       e += cmStrCat("CMake variable ", rootVar, " is set to:\n  ", *rootDef,
                     '\n');
@@ -288,7 +318,7 @@ void cmMakefile::MaybeWarnCMP0074(std::string const& rootVar, cmValue rootDef,
                     *rootEnv, '\n');
     }
     e += "For compatibility, CMake is ignoring the variable.";
-    this->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e);
+    this->IssuePolicyWarning(cmPolicies::CMP0074, {}, e);
   }
 }
 
@@ -297,7 +327,7 @@ void cmMakefile::MaybeWarnCMP0144(std::string const& rootVar, cmValue rootDef,
 {
   // Warn if a <PACKAGENAME>_ROOT variable we may use is set.
   if ((rootDef || rootEnv) && this->WarnedCMP0144.insert(rootVar).second) {
-    auto e = cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0144), '\n');
+    std::string e;
     if (rootDef) {
       e += cmStrCat("CMake variable ", rootVar, " is set to:\n  ", *rootDef,
                     '\n');
@@ -308,7 +338,7 @@ void cmMakefile::MaybeWarnCMP0144(std::string const& rootVar, cmValue rootDef,
     }
     e += "For compatibility, find_package is ignoring the variable, but "
          "code in a .cmake module might still use it.";
-    this->IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e);
+    this->IssuePolicyWarning(cmPolicies::CMP0144, {}, e);
   }
 }
 
@@ -628,7 +658,7 @@ bool cmMakefile::ExecuteCommand(cmListFileFunction const& lff,
 
 bool cmMakefile::IsImportedTargetGlobalScope() const
 {
-  return this->CurrentImportedTargetScope == ImportedTargetScope::Global;
+  return this->CurrentImportedTargetScope == cm::ImportedTargetScope::Global;
 }
 
 class cmMakefile::IncludeScope : public FileScopeBase
@@ -991,6 +1021,20 @@ void cmMakefile::AddExportBuildFileGenerator(
   this->ExportBuildFileGenerators.emplace_back(std::move(gen));
 }
 
+#ifndef CMAKE_BOOTSTRAP
+std::vector<std::unique_ptr<cmBuildSbomGenerator>> const&
+cmMakefile::GetBuildSbomGenerators() const
+{
+  return this->BuildSbomGenerators;
+}
+
+void cmMakefile::AddBuildSbomGenerator(
+  std::unique_ptr<cmBuildSbomGenerator> gen)
+{
+  this->BuildSbomGenerators.emplace_back(std::move(gen));
+}
+#endif
+
 namespace {
 struct file_not_persistent
 {
@@ -1142,7 +1186,7 @@ cmTarget* cmMakefile::GetCustomCommandTarget(
 
   cmTarget* t = &ti->second;
   if (objLibCommands == cmObjectLibraryCommands::Reject &&
-      t->GetType() == cmStateEnums::OBJECT_LIBRARY) {
+      t->GetType() == cm::TargetType::OBJECT_LIBRARY) {
     auto e = cmStrCat(
       "Target \"", target,
       "\" is an OBJECT library "
@@ -1150,7 +1194,7 @@ cmTarget* cmMakefile::GetCustomCommandTarget(
     this->GetCMakeInstance()->IssueMessage(MessageType::FATAL_ERROR, e, lfbt);
     return nullptr;
   }
-  if (t->GetType() == cmStateEnums::INTERFACE_LIBRARY) {
+  if (t->GetType() == cm::TargetType::INTERFACE_LIBRARY) {
     auto e = cmStrCat(
       "Target \"", target,
       "\" is an INTERFACE library "
@@ -1455,16 +1499,6 @@ void cmMakefile::AddTestGenerator(std::unique_ptr<cmTestGenerator> g)
   }
 }
 
-bool cmMakefile::ExplicitlyGeneratesSbom() const
-{
-  return this->ExplicitSbomGenerator;
-}
-
-void cmMakefile::SetExplicitlyGeneratesSbom(bool status)
-{
-  this->ExplicitSbomGenerator = status;
-}
-
 void cmMakefile::PushFunctionScope(std::string const& fileName,
                                    cmPolicies::PolicyMap const& pm,
                                    cmDiagnostics::DiagnosticMap dm)
@@ -1550,9 +1584,6 @@ public:
     this->Snapshot = this->GG->GetCMakeInstance()->GetCurrentSnapshot();
     this->GG->GetCMakeInstance()->SetCurrentSnapshot(this->Snapshot);
     this->GG->SetCurrentMakefile(mf);
-#if !defined(CMAKE_BOOTSTRAP)
-    this->GG->GetFileLockPool().PushFileScope();
-#endif
   }
 
   ~BuildsystemFileScope()
@@ -1560,9 +1591,6 @@ public:
     this->PopListFileVars();
     this->Makefile->PopFunctionBlockerBarrier(this->ReportError);
     this->Makefile->PopSnapshot(this->ReportError);
-#if !defined(CMAKE_BOOTSTRAP)
-    this->GG->GetFileLockPool().PopFileScope();
-#endif
     this->GG->SetCurrentMakefile(this->CurrentMakefile);
     this->GG->GetCMakeInstance()->SetCurrentSnapshot(this->Snapshot);
   }
@@ -1931,12 +1959,11 @@ void cmMakefile::AddCacheDefinition(std::string const& name, cmValue value,
     case cmPolicies::WARN:
       if (this->PolicyOptionalWarningEnabled("CMAKE_POLICY_WARNING_CMP0126") &&
           this->IsNormalDefinitionSet(name)) {
-        this->IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0126),
-                   "\nFor compatibility with older versions of CMake, normal "
-                   "variable \"",
-                   name, "\" will be removed from the current scope."));
+        this->IssuePolicyWarning(
+          cmPolicies::CMP0126, {},
+          cmStrCat("For compatibility with older versions of CMake, "
+                   "normal variable \""_s,
+                   name, "\" will be removed from the current scope."_s));
       }
       CM_FALLTHROUGH;
     case cmPolicies::OLD:
@@ -2003,9 +2030,9 @@ void cmMakefile::AddGlobalLinkInformation(cmTarget& target)
 {
   // for these targets do not add anything
   switch (target.GetType()) {
-    case cmStateEnums::UTILITY:
-    case cmStateEnums::GLOBAL_TARGET:
-    case cmStateEnums::INTERFACE_LIBRARY:
+    case cm::TargetType::UTILITY:
+    case cm::TargetType::GLOBAL_TARGET:
+    case cm::TargetType::INTERFACE_LIBRARY:
       return;
     default:;
   }
@@ -2043,16 +2070,15 @@ void cmMakefile::AddAlias(std::string const& lname, std::string const& tgtName,
   }
 }
 
-cmTarget* cmMakefile::AddLibrary(std::string const& lname,
-                                 cmStateEnums::TargetType type,
+cmTarget* cmMakefile::AddLibrary(std::string const& lname, cm::TargetType type,
                                  std::vector<std::string> const& srcs,
                                  bool excludeFromAll)
 {
-  assert(type == cmStateEnums::STATIC_LIBRARY ||
-         type == cmStateEnums::SHARED_LIBRARY ||
-         type == cmStateEnums::MODULE_LIBRARY ||
-         type == cmStateEnums::OBJECT_LIBRARY ||
-         type == cmStateEnums::INTERFACE_LIBRARY);
+  assert(type == cm::TargetType::STATIC_LIBRARY ||
+         type == cm::TargetType::SHARED_LIBRARY ||
+         type == cm::TargetType::MODULE_LIBRARY ||
+         type == cm::TargetType::OBJECT_LIBRARY ||
+         type == cm::TargetType::INTERFACE_LIBRARY);
 
   cmTarget* target = this->AddNewTarget(type, lname);
   // Clear its dependencies. Otherwise, dependencies might persist
@@ -2071,7 +2097,7 @@ cmTarget* cmMakefile::AddExecutable(std::string const& exeName,
                                     std::vector<std::string> const& srcs,
                                     bool excludeFromAll)
 {
-  cmTarget* target = this->AddNewTarget(cmStateEnums::EXECUTABLE, exeName);
+  cmTarget* target = this->AddNewTarget(cm::TargetType::EXECUTABLE, exeName);
   if (excludeFromAll) {
     target->SetProperty("EXCLUDE_FROM_ALL", "TRUE");
   }
@@ -2080,13 +2106,13 @@ cmTarget* cmMakefile::AddExecutable(std::string const& exeName,
   return target;
 }
 
-cmTarget* cmMakefile::AddNewTarget(cmStateEnums::TargetType type,
+cmTarget* cmMakefile::AddNewTarget(cm::TargetType type,
                                    std::string const& name)
 {
   return &this->CreateNewTarget(name, type).first;
 }
 
-cmTarget* cmMakefile::AddSynthesizedTarget(cmStateEnums::TargetType type,
+cmTarget* cmMakefile::AddSynthesizedTarget(cm::TargetType type,
                                            std::string const& name)
 {
   return &this
@@ -2096,8 +2122,8 @@ cmTarget* cmMakefile::AddSynthesizedTarget(cmStateEnums::TargetType type,
 }
 
 std::pair<cmTarget&, bool> cmMakefile::CreateNewTarget(
-  std::string const& name, cmStateEnums::TargetType type,
-  cmTarget::PerConfig perConfig, cmTarget::Visibility vis)
+  std::string const& name, cm::TargetType type, cmTarget::PerConfig perConfig,
+  cmTarget::Visibility vis)
 {
   auto ib =
     this->Targets.emplace(name, cmTarget(name, type, vis, this, perConfig));
@@ -2114,14 +2140,11 @@ std::pair<cmTarget&, bool> cmMakefile::CreateNewTarget(
 cmTarget* cmMakefile::AddNewUtilityTarget(std::string const& utilityName,
                                           bool excludeFromAll)
 {
-  cmTarget* target = this->AddNewTarget(cmStateEnums::UTILITY, utilityName);
+  cmTarget* target = this->AddNewTarget(cm::TargetType::UTILITY, utilityName);
   if (excludeFromAll) {
     target->SetProperty("EXCLUDE_FROM_ALL", "TRUE");
   }
   return target;
-}
-
-namespace {
 }
 
 #if !defined(CMAKE_BOOTSTRAP)
@@ -2159,7 +2182,7 @@ cmSourceGroup* cmMakefile::GetSourceGroup(
   return sg;
 }
 
-void cmMakefile::AddSourceGroup(std::string const& name, char const* regex)
+void cmMakefile::AddSourceGroup(std::string const& name, cm::string_view regex)
 {
   std::vector<std::string> nameVector;
   nameVector.push_back(name);
@@ -2167,7 +2190,7 @@ void cmMakefile::AddSourceGroup(std::string const& name, char const* regex)
 }
 
 void cmMakefile::AddSourceGroup(std::vector<std::string> const& name,
-                                char const* regex)
+                                cm::string_view regex)
 {
   cmSourceGroup* sg = nullptr;
   std::vector<std::string> currentName;
@@ -2184,7 +2207,7 @@ void cmMakefile::AddSourceGroup(std::vector<std::string> const& name,
   // i now contains the index of the last found component
   if (i == lastElement) {
     // group already exists, replace its regular expression
-    if (regex && sg) {
+    if (regex.data() && sg) {
       // We only want to set the regular expression.  If there are already
       // source files in the group, we don't want to remove them.
       sg->SetGroupRegex(regex);
@@ -2205,8 +2228,8 @@ void cmMakefile::AddSourceGroup(std::vector<std::string> const& name,
   }
   // build the whole source group path
   for (++i; i <= lastElement; ++i) {
-    sg->AddChild(cm::make_unique<cmSourceGroup>(name[i], nullptr,
-                                                sg->GetFullName().c_str()));
+    sg->AddChild(cm::make_unique<cmSourceGroup>(name[i], cm::string_view{},
+                                                sg->GetFullName()));
     sg = sg->LookupChild(name[i]);
   }
 
@@ -2603,6 +2626,83 @@ cm::optional<std::string> cmMakefile::DeferGetCall(std::string const& id) const
     call = std::move(tmp);
   }
   return call;
+}
+
+namespace {
+cmPolicies::PolicyStatus CheckCMP0219Impl(cmPolicies::PolicyStatus status,
+                                          std::string const& calleeName,
+                                          bool hasBackslashes,
+                                          std::set<std::string>& warned)
+{
+  if (status == cmPolicies::WARN && hasBackslashes &&
+      warned.insert(calleeName).second) {
+    return cmPolicies::WARN;
+  }
+  // Suppress WARN when there are no backslashes or already warned.
+  return status == cmPolicies::NEW ? cmPolicies::NEW : cmPolicies::OLD;
+}
+}
+
+cmPolicies::PolicyStatus cmMakefile::CheckCMP0219(
+  std::string const& calleeName, std::vector<std::string> const& args)
+{
+  bool const hasBackslashes =
+    std::any_of(args.begin(), args.end(), [](std::string const& s) {
+      return s.find('\\') != std::string::npos;
+    });
+  return CheckCMP0219Impl(GetPolicyStatus(cmPolicies::CMP0219), calleeName,
+                          hasBackslashes, WarnedCMP0219);
+}
+
+cmPolicies::PolicyStatus cmMakefile::CheckCMP0219(
+  std::string const& calleeName, std::vector<cmListFileArgument> const& args)
+{
+  bool const hasBackslashes =
+    std::any_of(args.begin(), args.end(), [](cmListFileArgument const& s) {
+      return s.Value.find('\\') != std::string::npos;
+    });
+  return CheckCMP0219Impl(GetPolicyStatus(cmPolicies::CMP0219), calleeName,
+                          hasBackslashes, WarnedCMP0219);
+}
+
+void cmMakefile::IssueCMP0219Warning(
+  std::string const& calleeName, std::vector<std::string> const& args) const
+{
+  std::string oldArgs;
+  for (std::string const& arg : args) {
+    if (arg.find('\\') == std::string::npos) {
+      continue;
+    }
+    if (!oldArgs.empty()) {
+      oldArgs += '\n';
+    }
+    oldArgs += cmStrCat(" \"", arg, '"');
+  }
+
+  std::string newArgs = oldArgs;
+  cmSystemTools::ReplaceString(newArgs, "\\", "\\\\");
+
+  this->IssueDiagnostic(
+    cmDiagnostics::CMD_POLICY,
+    cmStrCat(
+      cmPolicies::GetPolicyWarning(cmPolicies::CMP0219), '\n', "Command \"",
+      calleeName, "\" called with arguments containing backslashes.\n",
+      "Since the policy is not set, backslashes in the arguments:\n", oldArgs,
+      "\n", "will be interpreted as escape sequences for compatibility.\n",
+      "Set the policy to NEW to instead pass\n", newArgs, "\n",
+      "so that argument parsing will preserve the original values."));
+}
+
+void cmMakefile::IssueCMP0219Warning(
+  std::string const& calleeName,
+  std::vector<cmListFileArgument> const& args) const
+{
+  std::vector<std::string> stringArgs;
+  stringArgs.reserve(args.size());
+  for (cmListFileArgument const& arg : args) {
+    stringArgs.push_back(arg.Value);
+  }
+  this->IssueCMP0219Warning(calleeName, stringArgs);
 }
 
 MessageType cmMakefile::ExpandVariablesInStringImpl(
@@ -3346,8 +3446,7 @@ int cmMakefile::TryCompile(std::string const& srcdir,
     cm.SetCacheArgs(*cmakeArgs);
   }
   // to save time we pass the EnableLanguage info directly
-  cm.GetGlobalGenerator()->EnableLanguagesFromGenerator(
-    this->GetGlobalGenerator(), this);
+  cm.GetGlobalGenerator()->SetupTryCompile(this->GetGlobalGenerator(), this);
   for (unsigned dc = 1; dc < cmDiagnostics::CategoryCount; ++dc) {
     auto const category = static_cast<cmDiagnosticCategory>(dc);
     if (this->GetDiagnosticAction(category) == cmDiagnostics::Ignore) {
@@ -3491,6 +3590,27 @@ std::string cmMakefile::GetModulesFile(cm::string_view filename, bool& system,
     system = true;
     result = moduleInCMakeRoot;
   }
+
+#if defined(_WIN32) || defined(__APPLE__)
+  if (!result.empty()) {
+    std::string const requestedName =
+      cmSystemTools::GetFilenameName(std::string{ filename });
+    std::string actualName;
+    cmsys::Status const status =
+      cmSystemTools::ReadNameOnDisk(result, actualName);
+    if (status && actualName != requestedName) {
+      this->IssueDiagnostic(
+        cmDiagnostics::CMD_AUTHOR,
+        cmStrCat("The module name\n  ", requestedName, '\n',
+                 "does not match the case of the module file name on disk\n"
+                 "  ",
+                 cmSystemTools::GetFilenamePath(result), '/', actualName, '\n',
+                 "This may fail on case-sensitive file systems.  "
+                 "Use the module name\n  ",
+                 actualName, "\ninstead."));
+    }
+  }
+#endif
 
   return result;
 }
@@ -3866,14 +3986,12 @@ void cmMakefile::RaiseScope(std::vector<std::string> const& variables)
 }
 
 cmTarget* cmMakefile::AddImportedTarget(std::string const& name,
-                                        cmStateEnums::TargetType type,
-                                        bool global)
+                                        cm::TargetType type,
+                                        cm::ImportedTargetScope scope)
 {
   // Create the target.
   auto target =
-    cm::make_unique<cmTarget>(name, type,
-                              global ? cmTarget::Visibility::ImportedGlobally
-                                     : cmTarget::Visibility::Imported,
+    cm::make_unique<cmTarget>(name, type, cmTarget::ImportedVisibility(scope),
                               this, cmTarget::PerConfig::Yes);
 
   // Add to the set of available imported targets.
@@ -3891,7 +4009,7 @@ cmTarget* cmMakefile::AddForeignTarget(std::string const& origin,
 {
   auto foreign_name = cmStrCat("@foreign_", origin, "::", name);
   auto target = cm::make_unique<cmTarget>(
-    foreign_name, cmStateEnums::TargetType::INTERFACE_LIBRARY,
+    foreign_name, cm::TargetType::INTERFACE_LIBRARY,
     cmTarget::Visibility::Foreign, this, cmTarget::PerConfig::Yes);
 
   this->ImportedTargets[foreign_name] = target.get();
@@ -3902,13 +4020,13 @@ cmTarget* cmMakefile::AddForeignTarget(std::string const& origin,
   return this->ImportedTargetsOwned.back().get();
 }
 
-cmTarget* cmMakefile::FindTargetToUse(
-  std::string const& name, cmStateEnums::TargetDomainSet domains) const
+cmTarget* cmMakefile::FindTargetToUse(std::string const& name,
+                                      cm::TargetDomainSet domains) const
 {
   // Look for an imported target.  These take priority because they
   // are more local in scope and do not have to be globally unique.
   auto targetName = name;
-  if (domains.contains(cmStateEnums::TargetDomain::ALIAS)) {
+  if (domains.contains(cm::TargetDomain::ALIAS)) {
     // Look for local alias targets.
     auto alias = this->AliasTargets.find(name);
     if (alias != this->AliasTargets.end()) {
@@ -3917,9 +4035,8 @@ cmTarget* cmMakefile::FindTargetToUse(
   }
   auto const imported = this->ImportedTargets.find(targetName);
 
-  bool const useForeign =
-    domains.contains(cmStateEnums::TargetDomain::FOREIGN);
-  bool const useNative = domains.contains(cmStateEnums::TargetDomain::NATIVE);
+  bool const useForeign = domains.contains(cm::TargetDomain::FOREIGN);
+  bool const useNative = domains.contains(cm::TargetDomain::NATIVE);
 
   if (imported != this->ImportedTargets.end()) {
     if (imported->second->IsForeign() ? useForeign : useNative) {
@@ -3969,7 +4086,7 @@ bool cmMakefile::EnforceUniqueName(std::string const& name, std::string& msg,
     // The conflict is with a non-imported target.
     // Allow this if the user has requested support.
     cmake* cm = this->GetCMakeInstance();
-    if (isCustom && existing->GetType() == cmStateEnums::UTILITY &&
+    if (isCustom && existing->GetType() == cm::TargetType::UTILITY &&
         this != existing->GetMakefile() &&
         cm->GetState()->GetGlobalPropertyAsBool(
           "ALLOW_DUPLICATE_CUSTOM_TARGETS")) {
@@ -3983,22 +4100,22 @@ bool cmMakefile::EnforceUniqueName(std::string const& name, std::string& msg,
       << "\" because another target with the same name already exists.  "
          "The existing target is ";
     switch (existing->GetType()) {
-      case cmStateEnums::EXECUTABLE:
+      case cm::TargetType::EXECUTABLE:
         e << "an executable ";
         break;
-      case cmStateEnums::STATIC_LIBRARY:
+      case cm::TargetType::STATIC_LIBRARY:
         e << "a static library ";
         break;
-      case cmStateEnums::SHARED_LIBRARY:
+      case cm::TargetType::SHARED_LIBRARY:
         e << "a shared library ";
         break;
-      case cmStateEnums::MODULE_LIBRARY:
+      case cm::TargetType::MODULE_LIBRARY:
         e << "a module library ";
         break;
-      case cmStateEnums::UTILITY:
+      case cm::TargetType::UTILITY:
         e << "a custom target ";
         break;
-      case cmStateEnums::INTERFACE_LIBRARY:
+      case cm::TargetType::INTERFACE_LIBRARY:
         e << "an interface library ";
         break;
       default:
@@ -4127,7 +4244,7 @@ bool cmMakefile::SetPolicy(cmPolicies::PolicyID id,
   }
 
   // Deprecate old policies.
-  if (status == cmPolicies::OLD && id <= cmPolicies::CMP0155 &&
+  if (status == cmPolicies::OLD && id <= cmPolicies::CMP0161 &&
       !(this->GetCMakeInstance()->GetIsInTryCompile() &&
         (
           // Policies set by cmCoreTryCompile::TryCompileCode.
@@ -4135,7 +4252,7 @@ bool cmMakefile::SetPolicy(cmPolicies::PolicyID id,
           id == cmPolicies::CMP0104 || id == cmPolicies::CMP0123 ||
           id == cmPolicies::CMP0126 || id == cmPolicies::CMP0128 ||
           id == cmPolicies::CMP0136 || id == cmPolicies::CMP0141 ||
-          id == cmPolicies::CMP0155))) {
+          id == cmPolicies::CMP0155 || id == cmPolicies::CMP0157))) {
     std::unique_ptr<PolicyPushPop> ps;
     std::unique_ptr<DiagnosticPushPop> ds;
 

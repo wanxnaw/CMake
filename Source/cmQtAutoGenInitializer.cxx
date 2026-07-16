@@ -57,6 +57,7 @@
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 #include "cmake.h"
 
@@ -105,8 +106,8 @@ bool StaticLibraryCycle(cmGeneratorTarget const* targetOrigin,
                         std::string const& config)
 {
   bool cycle = false;
-  if ((targetOrigin->GetType() == cmStateEnums::STATIC_LIBRARY) &&
-      (targetDepend->GetType() == cmStateEnums::STATIC_LIBRARY)) {
+  if ((targetOrigin->GetType() == cm::TargetType::STATIC_LIBRARY) &&
+      (targetDepend->GetType() == cm::TargetType::STATIC_LIBRARY)) {
     std::set<cmGeneratorTarget const*> knownLibs;
     std::deque<cmGeneratorTarget const*> testLibs;
 
@@ -130,7 +131,7 @@ bool StaticLibraryCycle(cmGeneratorTarget const* targetOrigin,
         for (cmLinkItem const& item : libs->Libraries) {
           cmGeneratorTarget const* depTarget = item.Target;
           if (depTarget &&
-              (depTarget->GetType() == cmStateEnums::STATIC_LIBRARY) &&
+              (depTarget->GetType() == cm::TargetType::STATIC_LIBRARY) &&
               knownLibs.insert(depTarget).second) {
             testLibs.push_back(depTarget);
           }
@@ -1221,20 +1222,18 @@ bool cmQtAutoGenInitializer::InitScanFiles()
       for (MUFile const* muf : this->AutogenTarget.FilesGenerated) {
         files += cmStrCat("  ", Quoted(muf->FullPath), '\n');
       }
-      this->Makefile->IssueDiagnostic(
-        cmDiagnostics::CMD_AUTHOR,
+      this->Makefile->IssuePolicyWarning(
+        cmPolicies::CMP0071, {},
         cmStrCat(
-          cmPolicies::GetPolicyWarning(cmPolicies::CMP0071),
-          "\n"
           "For compatibility, CMake is excluding the GENERATED source "
-          "file(s):\n",
-          files, "from processing by ",
+          "file(s):\n"_s,
+          files, "from processing by "_s,
           cmQtAutoGen::Tools(this->Moc.Enabled, this->Uic.Enabled, false),
           ".  If any of the files should be processed, set CMP0071 to NEW.  "
           "If any of the files should not be processed, "
-          "explicitly exclude them by setting the source file property ",
-          property, ":\n  set_property(SOURCE file.h PROPERTY ", property,
-          " ON)\n"));
+          "explicitly exclude them by setting the source file property "_s,
+          property, ":\n  set_property(SOURCE file.h PROPERTY "_s, property,
+          " ON)"_s));
     }
   }
 
@@ -1253,19 +1252,17 @@ bool cmQtAutoGenInitializer::InitScanFiles()
     for (cmSourceFile const* sf : this->AutogenTarget.CMP0100HeadersWarn) {
       files += cmStrCat("  ", Quoted(sf->GetFullPath()), '\n');
     }
-    this->Makefile->IssueDiagnostic(
-      cmDiagnostics::CMD_AUTHOR,
+    this->Makefile->IssuePolicyWarning(
+      cmPolicies::CMP0100, {},
       cmStrCat(
-        cmPolicies::GetPolicyWarning(cmPolicies::CMP0100),
-        "\n"
-        "For compatibility, CMake is excluding the header file(s):\n",
-        files, "from processing by ",
+        "For compatibility, CMake is excluding the header file(s):\n"_s, files,
+        "from processing by "_s,
         cmQtAutoGen::Tools(this->Moc.Enabled, this->Uic.Enabled, false),
         ".  If any of the files should be processed, set CMP0100 to NEW.  "
         "If any of the files should not be processed, "
-        "explicitly exclude them by setting the source file property ",
-        property, ":\n  set_property(SOURCE file.hh PROPERTY ", property,
-        " ON)\n"));
+        "explicitly exclude them by setting the source file property "_s,
+        property, ":\n  set_property(SOURCE file.hh PROPERTY "_s, property,
+        " ON)"_s));
   }
 
   // Process qrc files
@@ -2592,10 +2589,8 @@ bool cmQtAutoGenInitializer::GetQtExecutable(GenVarsT& genVars,
     if (this->MultiConfig && this->UseBetterGraph) {
       for (auto const& config : this->ConfigsList) {
         if (!genVars.ExecutableFeatures.Config[config]) {
-          if (!genVars.ExecutableFeatures.Config[config]) {
-            print_err(err);
-            return false;
-          }
+          print_err(err);
+          return false;
         }
       }
     } else {

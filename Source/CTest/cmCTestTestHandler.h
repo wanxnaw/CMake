@@ -19,6 +19,7 @@
 
 #include "cmsys/RegularExpression.hxx"
 
+#include "cmCMakePresetsGraph.h"
 #include "cmCTest.h"
 #include "cmCTestGenericHandler.h"
 #include "cmCTestTypes.h" // IWYU pragma: keep
@@ -30,6 +31,7 @@ class cmXMLWriter;
 struct cmCTestTestOptions
 {
   bool RerunFailed = false;
+  bool OutOfDateOnly = false;
   bool ScheduleRandom = false;
   bool StopOnFailure = false;
   bool UseUnion = false;
@@ -60,6 +62,18 @@ struct cmCTestTestOptions
 
   std::vector<std::string> TestPassthroughArguments;
 };
+
+/** Apply a resolved TestPreset's fields to \a opts.
+ *
+ * Both the \c ctest \c --preset CLI path and the \c ctest_test(PRESET)
+ * script-command path call this to keep the mapping in one place and avoid
+ * drift when new preset fields are added.
+ *
+ * Fields that do not live in cmCTestTestOptions (e.g. ParallelLevel, Repeat,
+ * Timeout, NoTestsAction) are handled separately at each call site.
+ */
+void cmCTestApplyTestPresetToOptions(
+  cmCTestTestOptions& opts, cmCMakePresetsGraph::TestPreset const& preset);
 
 /** \class cmCTestTestHandler
  * \brief A class that handles ctest -S invocations
@@ -131,6 +145,7 @@ public:
   struct cmCTestTestProperties
   {
     void AppendError(cm::string_view err);
+    std::string GetStampFile();
     cm::optional<std::string> Error;
     std::string Name;
     // working directory for test, overridden by WORKING_DIRECTORY property
@@ -179,6 +194,7 @@ public:
     std::set<std::string> RequireSuccessDepends;
     std::vector<std::vector<cmCTestTestResourceRequirement>> ResourceGroups;
     std::string GeneratedResourceSpecFile;
+    std::string BuildDepends;
     // Private test generator properties used to track backtraces
     cmListFileBacktrace Backtrace;
   };
@@ -329,6 +345,7 @@ private:
   // compute the lists of tests that will actually run
   // based on LastTestFailed.log
   bool ComputeTestListForRerunFailed();
+  void ComputeOutOfDateTests();
 
   // add required setup/cleanup tests not already in the
   // list of tests to be run and update dependencies between

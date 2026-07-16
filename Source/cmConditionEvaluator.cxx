@@ -11,6 +11,7 @@
 #include <sstream>
 #include <utility>
 
+#include <cm/optional>
 #include <cm/string_view>
 #include <cmext/algorithm>
 
@@ -31,6 +32,7 @@ namespace {
 auto const keyAND = "AND"_s;
 auto const keyCOMMAND = "COMMAND"_s;
 auto const keyDEFINED = "DEFINED"_s;
+auto const keyDIAGNOSTIC = "DIAGNOSTIC"_s;
 auto const keyEQUAL = "EQUAL"_s;
 auto const keyEXISTS = "EXISTS"_s;
 auto const keyIS_READABLE = "IS_READABLE"_s;
@@ -410,6 +412,9 @@ bool cmConditionEvaluator::HandleLevel0(cmArgumentList& newArgs,
       // now recursively invoke IsTrue to handle the values inside the
       // parenthetical expression
       auto const value = this->IsTrue(subExpr, errorString, status);
+      if (!errorString.empty()) {
+        return false;
+      }
       *arg = cmExpandedCommandArgument(bool2string(value), true);
       argOpen = std::next(arg);
       // remove the now evaluated parenthetical expression
@@ -475,6 +480,13 @@ bool cmConditionEvaluator::HandleLevel1(cmArgumentList& newArgs, std::string&,
       newArgs.ReduceOneArg(
         static_cast<bool>(
           this->Makefile.GetState()->GetCommand(args.next->GetValue())),
+        args);
+    }
+    // does a diagnostic exist
+    else if (this->IsKeyword(keyDIAGNOSTIC, *args.current)) {
+      newArgs.ReduceOneArg(
+        cmDiagnostics::GetDiagnosticCategory(args.next->GetValue())
+          .has_value(),
         args);
     }
     // does a policy exist
@@ -660,14 +672,11 @@ bool cmConditionEvaluator::HandleLevel2(cmArgumentList& newArgs,
       }
 
       else if (this->Policy139Status == cmPolicies::WARN) {
-        std::ostringstream e;
-        e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0139)
-          << "\n"
-             "PATH_EQUAL will be interpreted as an operator "
-             "when the policy is set to NEW.  "
-             "Since the policy is not set the OLD behavior will be used.";
-
-        this->Makefile.IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, e.str());
+        this->Makefile.IssuePolicyWarning(
+          cmPolicies::CMP0139, {},
+          "PATH_EQUAL will be interpreted as an operator "
+          "when the policy is set to NEW.  "
+          "Since the policy is not set the OLD behavior will be used."_s);
       }
     }
   }

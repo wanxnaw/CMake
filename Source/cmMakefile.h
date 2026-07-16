@@ -25,6 +25,7 @@
 
 #include "cmAlgorithms.h"
 #include "cmCustomCommand.h"
+#include "cmDiagnosticContext.h"
 #include "cmDiagnostics.h"
 #include "cmFindPackageStack.h"
 #include "cmFunctionBlocker.h"
@@ -35,6 +36,7 @@
 #include "cmSourceFileLocationKind.h"
 #include "cmStateSnapshot.h"
 #include "cmStateTypes.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 
 // IWYU does not see that 'std::unordered_map<std::string, cmTarget>'
@@ -52,6 +54,7 @@ class cmCompiledGeneratorExpression;
 class cmCustomCommandLines;
 class cmExecutionStatus;
 class cmExpandedCommandArgument;
+class cmBuildSbomGenerator;
 class cmExportBuildFileGenerator;
 class cmGeneratorExpressionEvaluationFile;
 class cmGlobalGenerator;
@@ -268,21 +271,19 @@ public:
   void AddLinkDirectory(std::string const& directory, bool before = false);
 
   /** Create a new imported target with the name and type given.  */
-  cmTarget* AddImportedTarget(std::string const& name,
-                              cmStateEnums::TargetType type, bool global);
+  cmTarget* AddImportedTarget(std::string const& name, cm::TargetType type,
+                              cm::ImportedTargetScope scope);
 
   cmTarget* AddForeignTarget(std::string const& origin,
                              std::string const& name);
 
   std::pair<cmTarget&, bool> CreateNewTarget(
-    std::string const& name, cmStateEnums::TargetType type,
+    std::string const& name, cm::TargetType type,
     cmTarget::PerConfig perConfig = cmTarget::PerConfig::Yes,
     cmTarget::Visibility vis = cmTarget::Visibility::Normal);
 
-  cmTarget* AddNewTarget(cmStateEnums::TargetType type,
-                         std::string const& name);
-  cmTarget* AddSynthesizedTarget(cmStateEnums::TargetType type,
-                                 std::string const& name);
+  cmTarget* AddNewTarget(cm::TargetType type, std::string const& name);
+  cmTarget* AddSynthesizedTarget(cm::TargetType type, std::string const& name);
 
   /** Create a target instance for the utility.  */
   cmTarget* AddNewUtilityTarget(std::string const& utilityName,
@@ -388,8 +389,7 @@ public:
   /**
    * Set the name of the library.
    */
-  cmTarget* AddLibrary(std::string const& libname,
-                       cmStateEnums::TargetType type,
+  cmTarget* AddLibrary(std::string const& libname, cm::TargetType type,
                        std::vector<std::string> const& srcs,
                        bool excludeFromAll = false);
   void AddAlias(std::string const& libname, std::string const& tgt,
@@ -533,9 +533,9 @@ public:
   /** Find a target to use in place of the given name.  The target
       returned may be imported or built within the project.  */
   cmTarget* FindTargetToUse(std::string const& name,
-                            cmStateEnums::TargetDomainSet domains = {
-                              cmStateEnums::TargetDomain::NATIVE,
-                              cmStateEnums::TargetDomain::ALIAS }) const;
+                            cm::TargetDomainSet domains = {
+                              cm::TargetDomain::NATIVE,
+                              cm::TargetDomain::ALIAS }) const;
   bool IsAlias(std::string const& name) const;
 
   std::map<std::string, std::string> GetAliasTargets() const
@@ -680,14 +680,14 @@ public:
   /**
    * Add a root source group for consideration when adding a new source.
    */
-  void AddSourceGroup(std::string const& name, char const* regex = nullptr);
+  void AddSourceGroup(std::string const& name, cm::string_view regex = {});
 
   /**
    * Add a source group for consideration when adding a new source.
    * name is tokenized.
    */
   void AddSourceGroup(std::vector<std::string> const& name,
-                      char const* regex = nullptr);
+                      cm::string_view regex = {});
 
   /**
    * Get and existing or create a new source group.
@@ -900,9 +900,6 @@ public:
   //! Initialize a makefile from its parent
   void InitializeFromParent(cmMakefile* parent);
 
-  bool ExplicitlyGeneratesSbom() const;
-  void SetExplicitlyGeneratesSbom(bool status = true);
-
   void AddInstallGenerator(std::unique_ptr<cmInstallGenerator> g);
 
   std::vector<std::unique_ptr<cmInstallGenerator>>& GetInstallGenerators()
@@ -982,22 +979,17 @@ public:
 
   bool IsImportedTargetGlobalScope() const;
 
-  enum class ImportedTargetScope
-  {
-    Local,
-    Global,
-  };
-
   /** Helper class to manage whether imported packages
    * should be globally scoped based off the find package command
    */
   class SetGlobalTargetImportScope
   {
   public:
-    SetGlobalTargetImportScope(cmMakefile* mk, ImportedTargetScope const scope)
+    SetGlobalTargetImportScope(cmMakefile* mk,
+                               cm::ImportedTargetScope const scope)
       : Makefile(mk)
     {
-      if (scope == ImportedTargetScope::Global &&
+      if (scope == cm::ImportedTargetScope::Global &&
           !this->Makefile->IsImportedTargetGlobalScope()) {
         this->Makefile->CurrentImportedTargetScope = scope;
         this->Set = true;
@@ -1009,7 +1001,7 @@ public:
     {
       if (this->Set) {
         this->Makefile->CurrentImportedTargetScope =
-          ImportedTargetScope::Local;
+          cm::ImportedTargetScope::Local;
       }
     }
 
@@ -1047,10 +1039,26 @@ public:
   void IssueDiagnostic(cmDiagnosticCategory category,
                        std::string const& text) const
   {
-    this->IssueDiagnostic(category, text, this->Backtrace);
+    this->IssueDiagnostic(category, text,
+                          cmDiagnosticContext{ this->Backtrace });
   }
   void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
-                       cmListFileBacktrace const& bt) const;
+                       cmListFileBacktrace backtrace) const
+  {
+    this->IssueDiagnostic(category, text,
+                          cmDiagnosticContext{ std::move(backtrace) });
+  }
+  void IssueDiagnostic(cmDiagnosticCategory category, std::string const& text,
+                       cmDiagnosticContext const& context) const;
+  void IssuePolicyWarning(cmPolicies::PolicyID policy, cm::string_view preface,
+                          cm::string_view postface,
+                          cmListFileBacktrace const& bt) const;
+  void IssuePolicyWarning(cmPolicies::PolicyID policy,
+                          cm::string_view preface = {},
+                          cm::string_view postface = {}) const
+  {
+    this->IssuePolicyWarning(policy, preface, postface, this->Backtrace);
+  }
   Message::LogLevel GetCurrentLogLevel() const;
 
   /** Set whether or not to report a CMP0000 violation.  */
@@ -1095,6 +1103,12 @@ public:
   GetExportBuildFileGenerators() const;
   void AddExportBuildFileGenerator(
     std::unique_ptr<cmExportBuildFileGenerator> gen);
+
+#ifndef CMAKE_BOOTSTRAP
+  std::vector<std::unique_ptr<cmBuildSbomGenerator>> const&
+  GetBuildSbomGenerators() const;
+  void AddBuildSbomGenerator(std::unique_ptr<cmBuildSbomGenerator> gen);
+#endif
 
   // Maintain a stack of package roots to allow nested PACKAGE_ROOT_PATH
   // searches
@@ -1168,6 +1182,20 @@ public:
   bool DeferCancelCall(std::string const& id);
   cm::optional<std::string> DeferGetCallIds() const;
   cm::optional<std::string> DeferGetCall(std::string const& id) const;
+
+  //! Check CMP0219 policy status for the given callee and arguments.
+  //! Returns the effective policy status: OLD, NEW, or WARN (only on
+  //! first occurrence of calleeName with backslashes present).  The
+  //! caller is responsible for issuing any warning when WARN is returned.
+  cmPolicies::PolicyStatus CheckCMP0219(std::string const& calleeName,
+                                        std::vector<std::string> const& args);
+  cmPolicies::PolicyStatus CheckCMP0219(
+    std::string const& calleeName,
+    std::vector<cmListFileArgument> const& args);
+  void IssueCMP0219Warning(std::string const& calleeName,
+                           std::vector<std::string> const& args) const;
+  void IssueCMP0219Warning(std::string const& calleeName,
+                           std::vector<cmListFileArgument> const& args) const;
 
 protected:
   // add link libraries and directories to the target
@@ -1268,6 +1296,10 @@ private:
   std::vector<std::unique_ptr<cmExportBuildFileGenerator>>
     ExportBuildFileGenerators;
 
+#ifndef CMAKE_BOOTSTRAP
+  std::vector<std::unique_ptr<cmBuildSbomGenerator>> BuildSbomGenerators;
+#endif
+
   std::vector<std::unique_ptr<cmGeneratorExpressionEvaluationFile>>
     EvaluationFiles;
 
@@ -1326,13 +1358,14 @@ private:
   cmFindPackageStack FindPackageStack;
   unsigned int FindPackageStackNextIndex = 0;
 
-  bool ExplicitSbomGenerator = false;
   bool DebugFindPkg = false;
 
   bool CheckSystemVars;
   bool CheckCMP0000;
   std::set<std::string> WarnedCMP0074;
   std::set<std::string> WarnedCMP0144;
+  std::set<std::string> WarnedCMP0219;
   bool IsSourceFileTryCompile;
-  ImportedTargetScope CurrentImportedTargetScope = ImportedTargetScope::Local;
+  cm::ImportedTargetScope CurrentImportedTargetScope =
+    cm::ImportedTargetScope::Local;
 };

@@ -10,9 +10,28 @@ endif()
 
 include(CMakeTestCompilerCommon)
 
+# work around enforced code signing and / or missing executable target type
+set(__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE ${CMAKE_TRY_COMPILE_TARGET_TYPE})
+if(_CMAKE_FEATURE_DETECTION_TARGET_TYPE)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE ${_CMAKE_FEATURE_DETECTION_TARGET_TYPE})
+endif()
+
 # Remove any cached result from an older CMake version.
 # We now store this in CMakeCUDACompiler.cmake.
 unset(CMAKE_CUDA_COMPILER_WORKS CACHE)
+
+# If the compiler was not identified, required compiler-specific variables
+# such as _CMAKE_CUDA_WHOLE_FLAG will not be set.  Issue a clear diagnostic
+# rather than the cryptic "required internal CMake variable not set" message
+# that the generator would otherwise emit.
+if(NOT CMAKE_CUDA_COMPILER_ID)
+  PrintTestCompilerStatus("CUDA")
+  PrintTestCompilerResult(CHECK_FAIL "broken")
+  message(FATAL_ERROR "The CUDA compiler\n  \"${CMAKE_CUDA_COMPILER}\"\n"
+    "is not able to compile a simple test program.\nThe compiler could not "
+    "be identified as a supported CUDA compiler.\n\n"
+    "CMake will not be able to correctly generate this project.")
+endif()
 
 # Try to identify the ABI and configure it into CMakeCUDACompiler.cmake
 include(${CMAKE_ROOT}/Modules/CMakeDetermineCompilerABI.cmake)
@@ -89,4 +108,6 @@ configure_file(
   )
 include(${CMAKE_PLATFORM_INFO_DIR}/CMakeCUDACompiler.cmake)
 
+set(CMAKE_TRY_COMPILE_TARGET_TYPE ${__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE})
+unset(__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE)
 unset(__CMAKE_CUDA_COMPILER_OUTPUT)

@@ -4,10 +4,12 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <sstream>
 #include <utility>
 
 #include <cm/memory>
+#include <cm/optional>
 #include <cm/string_view>
 #include <cmext/string_view>
 
@@ -24,10 +26,10 @@
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmPropertyMap.h"
-#include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmTarget.h"
+#include "cmTargetTypes.h"
 #include "cmValue.h"
 
 cmExportFileGenerator::cmExportFileGenerator() = default;
@@ -281,7 +283,7 @@ void getCompatibleInterfaceProperties(cmGeneratorTarget const* target,
                                       std::set<std::string>& ifaceProperties,
                                       std::string const& config)
 {
-  if (target->GetType() == cmStateEnums::OBJECT_LIBRARY) {
+  if (target->GetType() == cm::TargetType::OBJECT_LIBRARY) {
     // object libraries have no link information, so nothing to compute
     return;
   }
@@ -301,7 +303,8 @@ void getCompatibleInterfaceProperties(cmGeneratorTarget const* target,
   cmComputeLinkInformation::ItemVector const& deps = info->GetItems();
 
   for (auto const& dep : deps) {
-    if (!dep.Target || dep.Target->GetType() == cmStateEnums::OBJECT_LIBRARY) {
+    if (!dep.Target ||
+        dep.Target->GetType() == cm::TargetType::OBJECT_LIBRARY) {
       continue;
     }
     getPropertyContents(dep.Target, "COMPATIBLE_INTERFACE_BOOL",
@@ -337,7 +340,7 @@ void cmExportFileGenerator::PopulateCompatibleInterfaceProperties(
   getPropertyContents(gtarget, "COMPATIBLE_INTERFACE_NUMBER_MAX",
                       ifaceProperties);
 
-  if (gtarget->GetType() != cmStateEnums::INTERFACE_LIBRARY) {
+  if (gtarget->GetType() != cm::TargetType::INTERFACE_LIBRARY) {
     std::vector<std::string> configNames =
       gtarget->Target->GetMakefile()->GetGeneratorConfigs(
         cmMakefile::IncludeEmptyConfig);
@@ -449,9 +452,9 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpressions(
   }
 }
 
-void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
-  std::string& input, cmGeneratorTarget const* target,
-  cmLocalGenerator const* lg)
+cm::optional<std::string> cmResolveTargetsInGeneratorExpression(
+  std::string& input,
+  std::function<bool(std::string& name)> const& addTargetNamespace)
 {
   std::string::size_type pos = 0;
   std::string::size_type lastPos = pos;
@@ -474,13 +477,13 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
     std::string targetName =
       input.substr(nameStartPos, commaPos - nameStartPos);
 
-    if (this->AddTargetNamespace(targetName, target, lg)) {
+    if (addTargetNamespace(targetName)) {
       input.replace(nameStartPos, commaPos - nameStartPos, targetName);
     }
     lastPos = nameStartPos + targetName.size() + 1;
   }
 
-  std::string errorString;
+  cm::optional<std::string> errorString;
   pos = 0;
   lastPos = pos;
   while ((pos = input.find("$<TARGET_NAME:", lastPos)) != std::string::npos) {
@@ -496,7 +499,7 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
                     "literal.";
       break;
     }
-    if (!this->AddTargetNamespace(targetName, target, lg)) {
+    if (!addTargetNamespace(targetName)) {
       errorString = "$<TARGET_NAME:...> requires its parameter to be a "
                     "reachable target.";
       break;
@@ -507,7 +510,7 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
 
   pos = 0;
   lastPos = pos;
-  while (errorString.empty() &&
+  while (!errorString &&
          (pos = input.find("$<LINK_ONLY:", lastPos)) != std::string::npos) {
     std::string::size_type nameStartPos = pos + cmStrLen("$<LINK_ONLY:");
     std::string::size_type endPos = input.find('>', nameStartPos);
@@ -517,13 +520,13 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
     }
     std::string libName = input.substr(nameStartPos, endPos - nameStartPos);
     if (cmGeneratorExpression::IsValidTargetName(libName) &&
-        this->AddTargetNamespace(libName, target, lg)) {
+        addTargetNamespace(libName)) {
       input.replace(nameStartPos, endPos - nameStartPos, libName);
     }
     lastPos = nameStartPos + libName.size() + 1;
   }
 
-  while (errorString.empty() &&
+  while (!errorString &&
          (pos = input.find("$<COMPILE_ONLY:", lastPos)) != std::string::npos) {
     std::string::size_type nameStartPos = pos + cmStrLen("$<COMPILE_ONLY:");
     std::string::size_type endPos = input.find('>', nameStartPos);
@@ -533,17 +536,26 @@ void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
     }
     std::string libName = input.substr(nameStartPos, endPos - nameStartPos);
     if (cmGeneratorExpression::IsValidTargetName(libName) &&
-        this->AddTargetNamespace(libName, target, lg)) {
+        addTargetNamespace(libName)) {
       input.replace(nameStartPos, endPos - nameStartPos, libName);
     }
     lastPos = nameStartPos + libName.size() + 1;
   }
 
-  this->ReplaceInstallPrefix(input);
+  return errorString;
+}
 
-  if (!errorString.empty()) {
-    target->GetLocalGenerator()->IssueMessage(MessageType::FATAL_ERROR,
-                                              errorString);
+void cmExportFileGenerator::ResolveTargetsInGeneratorExpression(
+  std::string& input, cmGeneratorTarget const* target,
+  cmLocalGenerator const* lg)
+{
+  auto err = cmResolveTargetsInGeneratorExpression(
+    input, [this, target, lg](std::string& name) {
+      return this->AddTargetNamespace(name, target, lg);
+    });
+  this->ReplaceInstallPrefix(input);
+  if (err) {
+    target->GetLocalGenerator()->IssueMessage(MessageType::FATAL_ERROR, *err);
   }
 }
 
@@ -560,8 +572,8 @@ void cmExportFileGenerator::SetImportDetailProperties(
   cmMakefile* mf = target->Makefile;
 
   // Add the soname for unix shared libraries.
-  if (target->GetType() == cmStateEnums::SHARED_LIBRARY ||
-      target->GetType() == cmStateEnums::MODULE_LIBRARY) {
+  if (target->GetType() == cm::TargetType::SHARED_LIBRARY ||
+      target->GetType() == cm::TargetType::MODULE_LIBRARY) {
     if (!target->IsDLLPlatform()) {
       std::string prop;
       std::string value;

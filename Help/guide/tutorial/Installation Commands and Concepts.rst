@@ -1,18 +1,18 @@
 Step 9: Installation Commands and Concepts
 ==========================================
 
-Projects need to do more than build and test their code, they need to make it
+Projects need to do more than build and test their code. They need to make it
 available to consumers. The layout of files in the build tree is unsuitable
-for consumption by other projects, binaries are in unexpected places, header
+for consumption by other projects. Binaries are in unexpected places, header
 files are located far away in the source tree, and there's no clear way
 to discover what targets are provided or how to use them.
 
-This translation, moving artifacts from the source and build trees into a final
-layout suitable for consumption, is known as installation. CMake supports a
-complete installation workflow as part of the project description, controlling
-both the layout of artifacts in the install tree, and reconstructing targets
-for other CMake projects which want to consume the libraries provided by the
-install tree.
+Moving artifacts from the source and build trees into a final layout suitable
+for consumption is known as installation. CMake supports a complete
+installation workflow as part of the project description, controlling both the
+layout of artifacts in the install tree and reconstructing targets for other
+CMake projects which want to consume the libraries provided by the install
+tree.
 
 Background
 ^^^^^^^^^^
@@ -65,6 +65,28 @@ Most important artifact kinds have known destinations which CMake will default
 to unless instructed to do otherwise. For example, ``RUNTIME`` will be installed
 to the location named by :module:`CMAKE_INSTALL_BINDIR <GNUInstallDirs>`, if
 the variable is available, otherwise they default to ``bin``.
+
+Just like we use :option:`cmake -B` to control what build directory will be
+used by CMake, we have a variety of options for telling CMake where to install
+things. This location is generally referred to as the install prefix. To
+set this at configure time, so that every :option:`cmake --install` performed
+using that build tree defaults to a given prefix, we can use any of:
+
+* the :option:`cmake --install-prefix` option;
+* the :ref:`installDir <CMakePresets.configurePresets.installDir>`
+  field in CMake presets; or
+* the :variable:`CMAKE_INSTALL_PREFIX` variable.
+
+.. note::
+  We have discouraged setting ``CMAKE_`` variables inside the project. Setting
+  :variable:`CMAKE_INSTALL_PREFIX` is *particularly* bad practice without very
+  good reasoning for doing so, since it prevents users from ever overriding it.
+  When providing a default, projects should check
+  :variable:`CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT`.
+
+Alternatively, we can use the
+:option:`cmake --install --prefix <cmake--install --prefix>` option to set the
+install prefix for a single install invocation.
 
 The full list of artifact kind default destinations is described in the
 following table.
@@ -140,6 +162,8 @@ Helpful Resources
 -----------------
 
 * :command:`install`
+* :option:`cmake --install-prefix`
+* :option:`cmake --install --prefix <cmake--install --prefix>`
 
 Files to Edit
 -------------
@@ -163,6 +187,14 @@ No special configuration is needed, configure and build as usual.
   cmake --build build
 
 We can verify the installation is correct with :option:`cmake --install`.
+
+.. note::
+
+  As with CTest, when using a multi-config generator such as Visual Studio, it
+  will be necessary to specify a configuration like ``Debug`` or ``Release``
+  using :option:`cmake --install --config <cmake--install --config>`.
+  This is true whenever using a multi-config generator, and won't be called out
+  specifically in future commands.
 
 .. code-block:: console
 
@@ -329,15 +361,6 @@ The build command is sufficient to reconfigure the project.
 
 We can verify the installation is correct with :option:`cmake --install`.
 
-.. note::
-
-  As with CTest, when using multi-config generator, eg Visual Studio, it will be
-  necessary to specify a configuration with
-  ``cmake --install --config <config> <remaining flags>``, where
-  ``<config>`` is a value like ``Debug`` or ``Release``. This is true whenever
-  using a multi-config generator, and won't be called out specifically in
-  future commands.
-
 .. code-block:: console
 
   cmake --install build --prefix install
@@ -471,7 +494,7 @@ When importing CMake targets from a target export file, there is no way to
 incompatible version for the one we requested, we'll be stuck with any
 side-effects incurred while we learned that version information.
 
-The answer CMake provides for this problem is a light-weight version file which
+The answer CMake provides for this problem is a lightweight version file which
 only describes this version compatibility information, which can be checked
 before CMake commits to fully importing the file.
 

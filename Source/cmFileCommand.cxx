@@ -416,12 +416,10 @@ bool HandleStringsCommand(std::vector<std::string> const& args,
         case cmPolicies::WARN:
           if (status.GetMakefile().PolicyOptionalWarningEnabled(
                 "CMAKE_POLICY_WARNING_CMP0159")) {
-            status.GetMakefile().IssueDiagnostic(
-              cmDiagnostics::CMD_AUTHOR,
-              cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0159),
-                       "\n"
-                       "For compatibility, CMake is leaving CMAKE_MATCH_<n> "
-                       "unchanged."));
+            status.GetMakefile().IssuePolicyWarning(
+              cmPolicies::CMP0159, {},
+              "For compatibility, CMake is leaving CMAKE_MATCH_<n> "
+              "unchanged."_s);
           }
           CM_FALLTHROUGH;
         case cmPolicies::OLD:
@@ -1376,17 +1374,14 @@ bool HandleRealPathCommand(std::vector<std::string> const& args,
     if (warnAbout152) {
       computeNewPath(input, realPath);
       if (oldPolicyPath != realPath) {
-        status.GetMakefile().IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
-          cmStrCat(cmPolicies::GetPolicyWarning(cmPolicies::CMP0152),
-                   "\n"
-                   "From input path:\n  ",
-                   input, "\nthe policy OLD behavior produces path:\n  ",
-                   oldPolicyPath,
-                   "\nbut the policy NEW behavior produces path:\n  ",
-                   realPath,
-                   "\nSince the policy is not set, CMake is using the OLD "
-                   "behavior for compatibility."));
+        status.GetMakefile().IssuePolicyWarning(
+          cmPolicies::CMP0152, {},
+          cmStrCat(
+            "From input path:\n  ", input,
+            "\nthe policy OLD behavior produces path:\n  ", oldPolicyPath,
+            "\nbut the policy NEW behavior produces path:\n  ", realPath,
+            "\nSince the policy is not set, CMake is using the OLD "
+            "behavior for compatibility."));
       }
     }
     realPath = oldPolicyPath;
@@ -2185,7 +2180,16 @@ bool HandleDownloadCommand(std::vector<std::string> const& args,
   if (tlsVersionOpt.has_value()) {
     if (cm::optional<int> v = cmCurlParseTLSVersion(*tlsVersionOpt)) {
       res = ::curl_easy_setopt(curl, CURLOPT_SSLVERSION, *v);
-      if (tlsVersionDefaulted && res == CURLE_NOT_BUILT_IN) {
+      // If the caller did not explicitly ask for TLS, and libcurl was
+      // built without any TLS backend, ignore failure to set our default.
+      // Note that libcurl reports the absence of any TLS backend with
+      // one of two distinct errors depending on how it was built:
+      // - CURLE_NOT_BUILT_IN from the Curl_setopt_SSLVERSION
+      //   stub macro in setopt.h, or
+      // - CURLE_UNKNOWN_OPTION from the function-level #else
+      //   arm of setopt_long_ssl() in setopt.c.
+      if (tlsVersionDefaulted &&
+          (res == CURLE_NOT_BUILT_IN || res == CURLE_UNKNOWN_OPTION)) {
         res = CURLE_OK;
       }
       check_curl_result(res,
@@ -2588,7 +2592,10 @@ bool HandleUploadCommand(std::vector<std::string> const& args,
   if (tlsVersionOpt.has_value()) {
     if (cm::optional<int> v = cmCurlParseTLSVersion(*tlsVersionOpt)) {
       res = ::curl_easy_setopt(curl, CURLOPT_SSLVERSION, *v);
-      if (tlsVersionDefaulted && res == CURLE_NOT_BUILT_IN) {
+      // See HandleDownloadCommand for the rationale behind accepting both
+      // CURLE_NOT_BUILT_IN and CURLE_UNKNOWN_OPTION here.
+      if (tlsVersionDefaulted &&
+          (res == CURLE_NOT_BUILT_IN || res == CURLE_UNKNOWN_OPTION)) {
         res = CURLE_OK;
       }
       check_curl_result(
@@ -3323,12 +3330,11 @@ bool HandleCreateLinkCommand(std::vector<std::string> const& args,
       if (cmp0205 == cmPolicies::NEW) {
         needToTry = false;
       } else if (cmp0205 == cmPolicies::WARN && arguments.CopyOnError) {
-        status.GetMakefile().IssueDiagnostic(
-          cmDiagnostics::CMD_AUTHOR,
+        status.GetMakefile().IssuePolicyWarning(
+          cmPolicies::CMP0205,
           cmStrCat("Path\n  ", fileName,
                    "\nis a directory. Hard link creation is not supported "
-                   "for directories.\n",
-                   cmPolicies::GetPolicyWarning(cmPolicies::CMP0205)));
+                   "for directories."));
       }
     }
 
@@ -3349,12 +3355,11 @@ bool HandleCreateLinkCommand(std::vector<std::string> const& args,
 
   if (cmp0205 == cmPolicies::WARN && arguments.CopyOnError &&
       sourceIsDirectory) {
-    status.GetMakefile().IssueDiagnostic(
-      cmDiagnostics::CMD_AUTHOR,
+    status.GetMakefile().IssuePolicyWarning(
+      cmPolicies::CMP0205,
       cmStrCat("Path\n  ", fileName,
                "\nis a directory. It will be copied "
-               "recursively when CMP0205 is set to NEW.\n",
-               cmPolicies::GetPolicyWarning(cmPolicies::CMP0205)));
+               "recursively when CMP0205 is set to NEW."));
   }
 
   // Check if copy-on-error is enabled in the arguments.
@@ -3715,6 +3720,7 @@ bool HandleArchiveCreateCommand(std::vector<std::string> const& args,
     bool Verbose = false;
     // "PATHS" requires at least one value, but use a custom check below.
     ArgumentParser::MaybeEmpty<std::vector<std::string>> Paths;
+    ArgumentParser::MaybeEmpty<std::vector<std::string>> PatternsExclude;
   };
 
   static auto const parser =
@@ -3728,7 +3734,8 @@ bool HandleArchiveCreateCommand(std::vector<std::string> const& args,
       .Bind("THREADS"_s, &Arguments::Threads)
       .Bind("WORKING_DIRECTORY"_s, &Arguments::WorkingDirectory)
       .Bind("VERBOSE"_s, &Arguments::Verbose)
-      .Bind("PATHS"_s, &Arguments::Paths);
+      .Bind("PATHS"_s, &Arguments::Paths)
+      .Bind("PATTERNS_EXCLUDE"_s, &Arguments::PatternsExclude);
 
   std::vector<std::string> unrecognizedArguments;
   auto parsedArgs =
@@ -3861,9 +3868,10 @@ bool HandleArchiveCreateCommand(std::vector<std::string> const& args,
   }
 
   if (!cmSystemTools::CreateTar(
-        parsedArgs.Output, parsedArgs.Paths, parsedArgs.WorkingDirectory,
-        compress, parsedArgs.Encoding, parsedArgs.Verbose, parsedArgs.MTime,
-        parsedArgs.Format, compressionLevel, threads)) {
+        parsedArgs.Output, parsedArgs.Paths, parsedArgs.PatternsExclude,
+        parsedArgs.WorkingDirectory, compress, parsedArgs.Encoding,
+        parsedArgs.Verbose, parsedArgs.MTime, parsedArgs.Format,
+        compressionLevel, threads)) {
     status.SetError(cmStrCat("failed to compress: ", parsedArgs.Output));
     cmSystemTools::SetFatalErrorOccurred();
     return false;
@@ -3883,17 +3891,20 @@ bool HandleArchiveExtractCommand(std::vector<std::string> const& args,
     bool ListOnly = false;
     std::string Destination;
     ArgumentParser::MaybeEmpty<std::vector<std::string>> Patterns;
+    ArgumentParser::MaybeEmpty<std::vector<std::string>> PatternsExclude;
     bool Touch = false;
   };
 
-  static auto const parser = cmArgumentParser<Arguments>{}
-                               .Bind("INPUT"_s, &Arguments::Input)
-                               .Bind("ENCODING"_s, &Arguments::Encoding)
-                               .Bind("VERBOSE"_s, &Arguments::Verbose)
-                               .Bind("LIST_ONLY"_s, &Arguments::ListOnly)
-                               .Bind("DESTINATION"_s, &Arguments::Destination)
-                               .Bind("PATTERNS"_s, &Arguments::Patterns)
-                               .Bind("TOUCH"_s, &Arguments::Touch);
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("INPUT"_s, &Arguments::Input)
+      .Bind("ENCODING"_s, &Arguments::Encoding)
+      .Bind("VERBOSE"_s, &Arguments::Verbose)
+      .Bind("LIST_ONLY"_s, &Arguments::ListOnly)
+      .Bind("DESTINATION"_s, &Arguments::Destination)
+      .Bind("PATTERNS"_s, &Arguments::Patterns)
+      .Bind("PATTERNS_EXCLUDE"_s, &Arguments::PatternsExclude)
+      .Bind("TOUCH"_s, &Arguments::Touch);
 
   std::vector<std::string> unrecognizedArguments;
   auto parsedArgs =
@@ -3923,6 +3934,7 @@ bool HandleArchiveExtractCommand(std::vector<std::string> const& args,
 
   if (parsedArgs.ListOnly) {
     if (!cmSystemTools::ListTar(inFile, parsedArgs.Patterns,
+                                parsedArgs.PatternsExclude,
                                 parsedArgs.Encoding, parsedArgs.Verbose)) {
       status.SetError(cmStrCat("failed to list: ", inFile));
       cmSystemTools::SetFatalErrorOccurred();
@@ -3957,7 +3969,7 @@ bool HandleArchiveExtractCommand(std::vector<std::string> const& args,
     }
 
     if (!cmSystemTools::ExtractTar(
-          inFile, parsedArgs.Patterns,
+          inFile, parsedArgs.Patterns, parsedArgs.PatternsExclude,
           parsedArgs.Touch ? cmSystemTools::cmTarExtractTimestamps::No
                            : cmSystemTools::cmTarExtractTimestamps::Yes,
           parsedArgs.Encoding, parsedArgs.Verbose)) {

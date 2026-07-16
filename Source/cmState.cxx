@@ -26,6 +26,7 @@
 #include "cmStateSnapshot.h"
 #include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmTargetTypes.h"
 #include "cmake.h"
 
 namespace cmStateDetail {
@@ -42,8 +43,7 @@ cmState::cmState(Role role, TryCompile isTryCompile)
 
 cmState::~cmState() = default;
 
-std::string const& cmState::GetTargetTypeName(
-  cmStateEnums::TargetType targetType)
+std::string const& cmState::GetTargetTypeName(cm::TargetType targetType)
 {
 #define MAKE_STATIC_PROP(PROP) static const std::string prop##PROP = #PROP
   MAKE_STATIC_PROP(STATIC_LIBRARY);
@@ -59,23 +59,23 @@ std::string const& cmState::GetTargetTypeName(
 #undef MAKE_STATIC_PROP
 
   switch (targetType) {
-    case cmStateEnums::STATIC_LIBRARY:
+    case cm::TargetType::STATIC_LIBRARY:
       return propSTATIC_LIBRARY;
-    case cmStateEnums::MODULE_LIBRARY:
+    case cm::TargetType::MODULE_LIBRARY:
       return propMODULE_LIBRARY;
-    case cmStateEnums::SHARED_LIBRARY:
+    case cm::TargetType::SHARED_LIBRARY:
       return propSHARED_LIBRARY;
-    case cmStateEnums::OBJECT_LIBRARY:
+    case cm::TargetType::OBJECT_LIBRARY:
       return propOBJECT_LIBRARY;
-    case cmStateEnums::EXECUTABLE:
+    case cm::TargetType::EXECUTABLE:
       return propEXECUTABLE;
-    case cmStateEnums::UTILITY:
+    case cm::TargetType::UTILITY:
       return propUTILITY;
-    case cmStateEnums::GLOBAL_TARGET:
+    case cm::TargetType::GLOBAL_TARGET:
       return propGLOBAL_TARGET;
-    case cmStateEnums::INTERFACE_LIBRARY:
+    case cm::TargetType::INTERFACE_LIBRARY:
       return propINTERFACE_LIBRARY;
-    case cmStateEnums::UNKNOWN_LIBRARY:
+    case cm::TargetType::UNKNOWN_LIBRARY:
       return propUNKNOWN_LIBRARY;
   }
   assert(false && "Unexpected target type");
@@ -390,11 +390,6 @@ std::vector<std::string> cmState::GetEnabledLanguages() const
   return this->EnabledLanguages;
 }
 
-void cmState::SetEnabledLanguages(std::vector<std::string> const& langs)
-{
-  this->EnabledLanguages = langs;
-}
-
 void cmState::ClearEnabledLanguages()
 {
   this->EnabledLanguages.clear();
@@ -471,13 +466,8 @@ void cmState::AddDisallowedCommand(std::string const& name,
                         cmExecutionStatus& status) -> bool {
       cmMakefile& mf = status.GetMakefile();
       switch (mf.GetPolicyStatus(policy)) {
-        case cmPolicies::WARN: {
-          std::string warning = cmPolicies::GetPolicyWarning(policy);
-          if (additionalWarning) {
-            warning = cmStrCat(warning, '\n', additionalWarning);
-          }
-          mf.IssueDiagnostic(cmDiagnostics::CMD_AUTHOR, warning);
-        }
+        case cmPolicies::WARN:
+          mf.IssuePolicyWarning(policy, {}, additionalWarning);
           CM_FALLTHROUGH;
         case cmPolicies::OLD:
           break;
@@ -683,6 +673,9 @@ cmValue cmState::GetGlobalProperty(std::string const& prop)
     this->SetGlobalProperty("ENABLED_LANGUAGES", langs);
   } else if (prop == "CMAKE_ROLE") {
     this->SetGlobalProperty("CMAKE_ROLE", this->GetRoleString());
+  } else if (prop == "_CMAKE_RUNNING_IN_BUILD_TREE") {
+    this->SetGlobalProperty("_CMAKE_RUNNING_IN_BUILD_TREE",
+                            cmSystemTools::GetCMakeInBuildTree() ? "1" : "0");
   }
 #define STRING_LIST_ELEMENT(F) ";" #F
   if (prop == "CMAKE_C_KNOWN_FEATURES") {
